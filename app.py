@@ -15,6 +15,7 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+
     data = request.get_json()
 
     if not data or "records" not in data:
@@ -25,29 +26,38 @@ def predict():
 
     df = pd.DataFrame(data["records"])
 
-    if "month_number" not in df.columns or "actual_units" not in df.columns:
-        return jsonify({
-            "status": "error",
-            "message": "Required fields: month_number, actual_units"
-        }), 400
+    forecasts = []
 
-    X = df[["month_number"]].astype(float)
-    y = df["actual_units"].astype(float)
+    skus = df["sku"].unique()
 
-    model = LinearRegression()
-    model.fit(X, y)
+    for sku in skus:
 
-    next_month = int(df["month_number"].max()) + 1
-    prediction = model.predict([[next_month]])[0]
+        sku_df = df[df["sku"] == sku]
+
+        X = sku_df[["month_number"]].astype(float)
+
+        y = sku_df["actual_units"].astype(float)
+
+        model = LinearRegression()
+
+        model.fit(X, y)
+
+        next_month = int(sku_df["month_number"].max()) + 1
+
+        prediction = model.predict([[next_month]])[0]
+
+        forecasts.append({
+            "sku": sku,
+            "prediction": round(float(prediction), 2),
+            "records_used": len(sku_df),
+            "slope": round(float(model.coef_[0]), 2)
+        })
 
     return jsonify({
         "status": "success",
         "model_type": "Linear Regression",
-        "next_month_number": next_month,
-        "prediction": round(float(prediction), 2),
-        "records_used": len(df),
-        "slope": round(float(model.coef_[0]), 2),
-        "intercept": round(float(model.intercept_), 2)
+        "forecast_count": len(forecasts),
+        "forecasts": forecasts
     })
 
 if __name__ == "__main__":
