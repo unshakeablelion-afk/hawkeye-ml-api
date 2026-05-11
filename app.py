@@ -45,13 +45,22 @@ def predict():
         next_month = int(sku_df["month_number"].max()) + 1
 
         prediction = model.predict([[next_month]])[0]
+        absolute_error = abs(
+    sku_df["actual_units"] - sku_df["forecast_units"]
+)
 
-        forecasts.append({
-            "sku": sku,
-            "prediction": round(float(prediction), 2),
-            "records_used": len(sku_df),
-            "slope": round(float(model.coef_[0]), 2)
-        })
+wmape = (
+    absolute_error.sum() /
+    sku_df["actual_units"].sum()
+) * 100
+
+forecasts.append({
+    "sku": sku,
+    "prediction": round(float(prediction), 2),
+    "records_used": len(sku_df),
+    "slope": round(float(model.coef_[0]), 2),
+    "wmape": round(float(wmape), 2)
+})
 
     return jsonify({
         "status": "success",
