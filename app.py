@@ -970,6 +970,13 @@ def predict():
             horizon=12,
             seasonal_periods=12
         )
+        xgboost_values = generate_forecast_horizon(
+            "XGBoost Forecast",
+            actuals,
+            sku_df,
+            horizon=12,
+            seasonal_periods=12
+        )
 
         forecast_horizons.append({
             "sku": sku,
@@ -977,6 +984,7 @@ def predict():
             "forecast": build_horizon_rows(future_months, horizon_values),
             "tasn_forecast": build_horizon_rows(future_months, tasn_values),
             "random_forest_forecast": build_horizon_rows(future_months, random_forest_values)
+            "xgboost_forecast": build_horizon_rows(future_months, xgboost_values)
         })
 
         narrative = generate_narrative(
