@@ -179,12 +179,12 @@ def backtest_holt_winters(actuals):
         try:
             model = ExponentialSmoothing(
                 train,
-                trend="add",
-                seasonal="add",
+                trend=None,
+                seasonal="mul",
                 seasonal_periods=12
             )
 
-            fitted = model.fit(optimized=False)
+            fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -313,15 +313,15 @@ def predict():
 
         # Holt-Winters Seasonal
         try:
-            if len(actuals) >= 18:
+            if len(actuals) >= 24:
                 hw_model = ExponentialSmoothing(
                     actuals,
-                    trend="add",
-                    seasonal="add",
+                    trend=None,
+                    seasonal="mul",
                     seasonal_periods=12
                 )
 
-                hw_fitted = hw_model.fit(optimized=False)
+                hw_fitted = hw_model.fit()
                 hw_prediction = hw_fitted.forecast(1)[0]
 
                 hw_wmape, hw_bias = backtest_holt_winters(actuals)
