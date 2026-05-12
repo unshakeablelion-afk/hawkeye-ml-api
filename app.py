@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from xgboost import XGBRegressor
 import pandas as pd
 import os
 import warnings
@@ -189,7 +190,7 @@ def build_ml_features_from_actuals(actuals):
 
     return feature_df
 
-def build_next_random_forest_features(actuals):
+def build_next_ml_features(actuals):
     actuals = list(actuals)
     peak_months = get_peak_months(actuals)
 
@@ -235,7 +236,7 @@ def get_random_forest_feature_importance(actuals):
         return []
 
     model = RandomForestRegressor(
-        n_estimators=200,
+        n_estimators=50,
         random_state=42,
         min_samples_leaf=1
     )
@@ -250,13 +251,7 @@ def get_random_forest_feature_importance(actuals):
             "importance": round(float(importance) * 100, 2)
         })
 
-    importance_rows = sorted(
-        importance_rows,
-        key=lambda x: x["importance"],
-        reverse=True
-    )
-
-    return importance_rows
+    return sorted(importance_rows, key=lambda x: x["importance"], reverse=True)
 
 def predict_random_forest_next(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
@@ -265,14 +260,38 @@ def predict_random_forest_next(actuals):
         return None
 
     model = RandomForestRegressor(
-        n_estimators=200,
+        n_estimators=50,
         random_state=42,
         min_samples_leaf=1
     )
 
     model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
 
-    next_features = build_next_random_forest_features(actuals)
+    next_features = build_next_ml_features(actuals)
+
+    prediction = model.predict(next_features[RF_FEATURES])[0]
+
+    return prediction
+
+def predict_xgboost_next(actuals):
+    feature_df = build_ml_features_from_actuals(actuals)
+
+    if len(feature_df) < 6 or len(actuals) < 13:
+        return None
+
+    model = XGBRegressor(
+        n_estimators=75,
+        learning_rate=0.05,
+        max_depth=3,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="reg:squarederror",
+        random_state=42
+    )
+
+    model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
+
+    next_features = build_next_ml_features(actuals)
 
     prediction = model.predict(next_features[RF_FEATURES])[0]
 
@@ -286,11 +305,43 @@ def backtest_random_forest(actuals):
     if len(actuals) < 18:
         return None, None
 
-    for i in range(15, len(actuals)):
+    start_index = max(15, len(actuals) - 4)
+
+    for i in range(start_index, len(actuals)):
         train_actuals = actuals[:i]
 
         try:
             prediction = predict_random_forest_next(train_actuals)
+
+            if prediction is None:
+                continue
+
+            forecasts.append(prediction)
+            actual_test.append(actuals[i])
+
+        except Exception:
+            continue
+
+    if len(actual_test) == 0:
+        return None, None
+
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
+
+def backtest_xgboost(actuals):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    if len(actuals) < 18:
+        return None, None
+
+    start_index = max(15, len(actuals) - 4)
+
+    for i in range(start_index, len(actuals)):
+        train_actuals = actuals[:i]
+
+        try:
+            prediction = predict_xgboost_next(train_actuals)
 
             if prediction is None:
                 continue
@@ -328,10 +379,7 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
             if len(actuals) >= seasonal_periods * 2:
                 trend_factor = get_trend_factor(actuals, seasonal_periods)
                 seasonal_base = actuals[-seasonal_periods:]
-                forecasts = [
-                    seasonal_base[i % seasonal_periods] * trend_factor
-                    for i in range(horizon)
-                ]
+                forecasts = [seasonal_base[i % seasonal_periods] * trend_factor for i in range(horizon)]
             else:
                 forecasts = [actuals[-1]] * horizon
 
@@ -340,6 +388,18 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
 
             for _ in range(horizon):
                 prediction = predict_random_forest_next(rolling_actuals)
+
+                if prediction is None:
+                    prediction = rolling_actuals[-1]
+
+                forecasts.append(prediction)
+                rolling_actuals.append(prediction)
+
+        elif model_name == "XGBoost Forecast":
+            rolling_actuals = list(actuals)
+
+            for _ in range(horizon):
+                prediction = predict_xgboost_next(rolling_actuals)
 
                 if prediction is None:
                     prediction = rolling_actuals[-1]
@@ -382,7 +442,6 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
                     seasonal="add",
                     seasonal_periods=12
                 )
-
                 fitted = model.fit()
                 forecasts = fitted.forecast(horizon).tolist()
             else:
@@ -408,7 +467,6 @@ def build_horizon_rows(months, values):
     return rows
 
 def generate_narrative(sku, best_model, wmape, bias, prediction, demand_pattern):
-
     trend_comment = "stable demand pattern"
 
     if prediction is not None and prediction > 250:
@@ -573,7 +631,6 @@ def backtest_holt_winters(actuals):
                 seasonal="add",
                 seasonal_periods=12
             )
-
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
@@ -608,7 +665,6 @@ def backtest_linear_regression(sku_df):
 
 @app.route("/predict", methods=["POST"])
 def predict():
-
     data = request.get_json()
 
     if not data or "records" not in data:
@@ -629,7 +685,6 @@ def predict():
     skus = df["sku"].unique()
 
     for sku in skus:
-
         sku_df = df[df["sku"] == sku].copy()
 
         sku_df["month_number"] = sku_df["month_number"].astype(float)
@@ -660,14 +715,12 @@ def predict():
             "features": rf_importance
         })
 
-        # Linear Regression
         lr_model = LinearRegression()
         lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
 
         lr_prediction = lr_model.predict([[next_month]])[0]
         lr_wmape, lr_bias = backtest_linear_regression(sku_df)
 
-        # Random Forest Forecast
         try:
             rf_prediction = predict_random_forest_next(actuals)
             rf_wmape, rf_bias = backtest_random_forest(actuals)
@@ -676,11 +729,17 @@ def predict():
             rf_wmape = None
             rf_bias = None
 
-        # Naive
+        try:
+            xgb_prediction = predict_xgboost_next(actuals)
+            xgb_wmape, xgb_bias = backtest_xgboost(actuals)
+        except Exception:
+            xgb_prediction = None
+            xgb_wmape = None
+            xgb_bias = None
+
         naive_prediction = actuals[-1]
         naive_wmape, naive_bias = backtest_naive(actuals)
 
-        # Seasonal Naive
         if len(actuals) >= 12:
             seasonal_naive_prediction = actuals[-12]
             seasonal_naive_wmape, seasonal_naive_bias = backtest_seasonal_naive(actuals, 12)
@@ -689,11 +748,9 @@ def predict():
             seasonal_naive_wmape = None
             seasonal_naive_bias = None
 
-        # Trend-Adjusted Seasonal Naive
         if len(actuals) >= 24:
             trend_factor = get_trend_factor(actuals, 12)
             trend_adjusted_seasonal_naive_prediction = actuals[-12] * trend_factor
-
             tasn_wmape, tasn_bias = backtest_trend_adjusted_seasonal_naive(actuals, 12)
         else:
             trend_factor = None
@@ -701,37 +758,29 @@ def predict():
             tasn_wmape = None
             tasn_bias = None
 
-        # Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
         ma_wmape, ma_bias = backtest_moving_average(actuals, 3)
 
-        # Exponential Smoothing
         try:
             es_model = ExponentialSmoothing(actuals, trend=None, seasonal=None)
             es_fitted = es_model.fit()
             es_prediction = es_fitted.forecast(1)[0]
-
             es_wmape, es_bias = backtest_exponential_smoothing(actuals)
-
         except Exception:
             es_prediction = None
             es_wmape = None
             es_bias = None
 
-        # Holt Trend
         try:
             holt_model = ExponentialSmoothing(actuals, trend="add", seasonal=None)
             holt_fitted = holt_model.fit()
             holt_prediction = holt_fitted.forecast(1)[0]
-
             holt_wmape, holt_bias = backtest_holt_trend(actuals)
-
         except Exception:
             holt_prediction = None
             holt_wmape = None
             holt_bias = None
 
-        # Holt-Winters Seasonal
         try:
             if len(actuals) >= 24:
                 hw_model = ExponentialSmoothing(
@@ -740,17 +789,13 @@ def predict():
                     seasonal="add",
                     seasonal_periods=12
                 )
-
                 hw_fitted = hw_model.fit()
                 hw_prediction = hw_fitted.forecast(1)[0]
-
                 hw_wmape, hw_bias = backtest_holt_winters(actuals)
-
             else:
                 hw_prediction = None
                 hw_wmape = None
                 hw_bias = None
-
         except Exception:
             hw_prediction = None
             hw_wmape = None
@@ -773,6 +818,16 @@ def predict():
                 "prediction": None if rf_prediction is None else round(float(rf_prediction), 2),
                 "wmape": rf_wmape,
                 "bias": rf_bias,
+                "records_used": len(sku_df),
+                "slope": None,
+                "demand_pattern": demand_pattern
+            },
+            {
+                "sku": sku,
+                "model": "XGBoost Forecast",
+                "prediction": None if xgb_prediction is None else round(float(xgb_prediction), 2),
+                "wmape": xgb_wmape,
+                "bias": xgb_bias,
                 "records_used": len(sku_df),
                 "slope": None,
                 "demand_pattern": demand_pattern
