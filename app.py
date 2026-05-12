@@ -33,10 +33,28 @@ def calculate_bias(actual, forecast):
         return None
 
     bias = ((forecast - actual).sum() / actual.sum()) * 100
-
     return round(bias, 2)
 
-def generate_narrative(sku, best_model, wmape, bias, prediction):
+def detect_seasonality(actuals, seasonal_periods=12):
+    actuals = list(actuals)
+
+    if len(actuals) < seasonal_periods * 2:
+        return False, "Insufficient history"
+
+    year_one = actuals[:seasonal_periods]
+    year_two = actuals[seasonal_periods:seasonal_periods * 2]
+
+    if len(year_one) != len(year_two):
+        return False, "Insufficient matching seasonal periods"
+
+    correlation = pd.Series(year_one).corr(pd.Series(year_two))
+
+    if correlation is not None and correlation >= 0.70:
+        return True, f"Seasonality detected with year-over-year pattern correlation of {round(float(correlation), 2)}"
+
+    return False, f"No strong seasonality detected; correlation was {round(float(correlation), 2)}"
+
+def generate_narrative(sku, best_model, wmape, bias, prediction, demand_pattern):
 
     trend_comment = "stable demand pattern"
 
@@ -61,14 +79,13 @@ def generate_narrative(sku, best_model, wmape, bias, prediction):
     else:
         bias_comment = "forecast is trending toward underforecasting"
 
-    narrative = (
+    return (
+        f"{sku} is classified as {demand_pattern}. "
         f"{sku} shows {trend_comment}. "
         f"{best_model} is currently the best performing model "
         f"with {wmape}% WMAPE and {bias}% bias. "
         f"{accuracy_comment.capitalize()} and {bias_comment}."
     )
-
-    return narrative
 
 def backtest_naive(actuals):
     actuals = list(actuals)
@@ -79,10 +96,21 @@ def backtest_naive(actuals):
         forecasts.append(actuals[i - 1])
         actual_test.append(actuals[i])
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
-    return wmape, bias
+def backtest_seasonal_naive(actuals, seasonal_periods=12):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    if len(actuals) <= seasonal_periods:
+        return None, None
+
+    for i in range(seasonal_periods, len(actuals)):
+        forecasts.append(actuals[i - seasonal_periods])
+        actual_test.append(actuals[i])
+
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 def backtest_moving_average(actuals, window=3):
     actuals = list(actuals)
@@ -93,10 +121,7 @@ def backtest_moving_average(actuals, window=3):
         forecasts.append(sum(actuals[i-window:i]) / window)
         actual_test.append(actuals[i])
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
-
-    return wmape, bias
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 def backtest_exponential_smoothing(actuals):
     actuals = list(actuals)
@@ -109,12 +134,7 @@ def backtest_exponential_smoothing(actuals):
         train = actuals[:i]
 
         try:
-            model = ExponentialSmoothing(
-                train,
-                trend=None,
-                seasonal=None
-            )
-
+            model = ExponentialSmoothing(train, trend=None, seasonal=None)
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
@@ -127,10 +147,7 @@ def backtest_exponential_smoothing(actuals):
     if len(actual_test) == 0:
         return None, None
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
-
-    return wmape, bias
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 def backtest_holt_trend(actuals):
     actuals = list(actuals)
@@ -143,12 +160,7 @@ def backtest_holt_trend(actuals):
         train = actuals[:i]
 
         try:
-            model = ExponentialSmoothing(
-                train,
-                trend="add",
-                seasonal=None
-            )
-
+            model = ExponentialSmoothing(train, trend="add", seasonal=None)
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
@@ -161,10 +173,7 @@ def backtest_holt_trend(actuals):
     if len(actual_test) == 0:
         return None, None
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
-
-    return wmape, bias
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 def backtest_holt_winters(actuals):
     actuals = list(actuals)
@@ -196,10 +205,7 @@ def backtest_holt_winters(actuals):
     if len(actual_test) == 0:
         return None, None
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
-
-    return wmape, bias
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 def backtest_linear_regression(sku_df):
     forecasts = []
@@ -210,21 +216,14 @@ def backtest_linear_regression(sku_df):
         test = sku_df.iloc[i]
 
         model = LinearRegression()
-
-        model.fit(
-            train[["month_number"]],
-            train["actual_units"]
-        )
+        model.fit(train[["month_number"]], train["actual_units"])
 
         prediction = model.predict([[test["month_number"]]])[0]
 
         forecasts.append(prediction)
         actual_test.append(test["actual_units"])
 
-    wmape = calculate_wmape(actual_test, forecasts)
-    bias = calculate_bias(actual_test, forecasts)
-
-    return wmape, bias
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -242,6 +241,7 @@ def predict():
     model_results = []
     best_models = []
     narratives = []
+    demand_patterns = []
 
     skus = df["sku"].unique()
 
@@ -257,12 +257,20 @@ def predict():
         next_month = int(sku_df["month_number"].max()) + 1
         actuals = sku_df["actual_units"].tolist()
 
+        seasonality_detected, seasonality_reason = detect_seasonality(actuals)
+
+        demand_pattern = "Seasonal" if seasonality_detected else "Non-seasonal / trend-stable"
+
+        demand_patterns.append({
+            "sku": sku,
+            "demand_pattern": demand_pattern,
+            "seasonality_detected": seasonality_detected,
+            "reason": seasonality_reason
+        })
+
         # Linear Regression
         lr_model = LinearRegression()
-        lr_model.fit(
-            sku_df[["month_number"]],
-            sku_df["actual_units"]
-        )
+        lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
 
         lr_prediction = lr_model.predict([[next_month]])[0]
         lr_wmape, lr_bias = backtest_linear_regression(sku_df)
@@ -271,18 +279,22 @@ def predict():
         naive_prediction = actuals[-1]
         naive_wmape, naive_bias = backtest_naive(actuals)
 
+        # Seasonal Naive
+        if len(actuals) >= 12:
+            seasonal_naive_prediction = actuals[-12]
+            seasonal_naive_wmape, seasonal_naive_bias = backtest_seasonal_naive(actuals, 12)
+        else:
+            seasonal_naive_prediction = None
+            seasonal_naive_wmape = None
+            seasonal_naive_bias = None
+
         # Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
         ma_wmape, ma_bias = backtest_moving_average(actuals, 3)
 
         # Exponential Smoothing
         try:
-            es_model = ExponentialSmoothing(
-                actuals,
-                trend=None,
-                seasonal=None
-            )
-
+            es_model = ExponentialSmoothing(actuals, trend=None, seasonal=None)
             es_fitted = es_model.fit()
             es_prediction = es_fitted.forecast(1)[0]
 
@@ -295,12 +307,7 @@ def predict():
 
         # Holt Trend
         try:
-            holt_model = ExponentialSmoothing(
-                actuals,
-                trend="add",
-                seasonal=None
-            )
-
+            holt_model = ExponentialSmoothing(actuals, trend="add", seasonal=None)
             holt_fitted = holt_model.fit()
             holt_prediction = holt_fitted.forecast(1)[0]
 
@@ -337,7 +344,6 @@ def predict():
             hw_bias = None
 
         sku_results = [
-
             {
                 "sku": sku,
                 "model": "Linear Regression",
@@ -345,9 +351,9 @@ def predict():
                 "wmape": lr_wmape,
                 "bias": lr_bias,
                 "records_used": len(sku_df),
-                "slope": round(float(lr_model.coef_[0]), 2)
+                "slope": round(float(lr_model.coef_[0]), 2),
+                "demand_pattern": demand_pattern
             },
-
             {
                 "sku": sku,
                 "model": "Naive Forecast",
@@ -355,9 +361,19 @@ def predict():
                 "wmape": naive_wmape,
                 "bias": naive_bias,
                 "records_used": len(sku_df),
-                "slope": None
+                "slope": None,
+                "demand_pattern": demand_pattern
             },
-
+            {
+                "sku": sku,
+                "model": "Seasonal Naive Forecast",
+                "prediction": None if seasonal_naive_prediction is None else round(float(seasonal_naive_prediction), 2),
+                "wmape": seasonal_naive_wmape,
+                "bias": seasonal_naive_bias,
+                "records_used": len(sku_df),
+                "slope": None,
+                "demand_pattern": demand_pattern
+            },
             {
                 "sku": sku,
                 "model": "3-Month Moving Average",
@@ -365,9 +381,9 @@ def predict():
                 "wmape": ma_wmape,
                 "bias": ma_bias,
                 "records_used": len(sku_df),
-                "slope": None
+                "slope": None,
+                "demand_pattern": demand_pattern
             },
-
             {
                 "sku": sku,
                 "model": "Exponential Smoothing",
@@ -375,9 +391,9 @@ def predict():
                 "wmape": es_wmape,
                 "bias": es_bias,
                 "records_used": len(sku_df),
-                "slope": None
+                "slope": None,
+                "demand_pattern": demand_pattern
             },
-
             {
                 "sku": sku,
                 "model": "Holt Trend",
@@ -385,9 +401,9 @@ def predict():
                 "wmape": holt_wmape,
                 "bias": holt_bias,
                 "records_used": len(sku_df),
-                "slope": None
+                "slope": None,
+                "demand_pattern": demand_pattern
             },
-
             {
                 "sku": sku,
                 "model": "Holt-Winters Seasonal",
@@ -395,20 +411,36 @@ def predict():
                 "wmape": hw_wmape,
                 "bias": hw_bias,
                 "records_used": len(sku_df),
-                "slope": None
+                "slope": None,
+                "demand_pattern": demand_pattern
             }
-
         ]
 
+        if seasonality_detected:
+            ranked_candidates = sku_results
+        else:
+            ranked_candidates = [
+                result for result in sku_results
+                if result["model"] not in ["Seasonal Naive Forecast", "Holt-Winters Seasonal"]
+            ]
+
         ranked_results = sorted(
-            sku_results,
+            ranked_candidates,
             key=lambda x: x["wmape"] if x["wmape"] is not None else 999999
         )
+
+        unranked_results = [
+            result for result in sku_results
+            if result not in ranked_results
+        ]
 
         for index, result in enumerate(ranked_results, start=1):
             result["rank"] = index
 
-        model_results.extend(ranked_results)
+        for result in unranked_results:
+            result["rank"] = "-"
+
+        model_results.extend(ranked_results + unranked_results)
 
         best_model = ranked_results[0]
 
@@ -418,7 +450,8 @@ def predict():
             "prediction": best_model["prediction"],
             "wmape": best_model["wmape"],
             "bias": best_model["bias"],
-            "rank": best_model["rank"]
+            "rank": best_model["rank"],
+            "demand_pattern": demand_pattern
         })
 
         narrative = generate_narrative(
@@ -426,7 +459,8 @@ def predict():
             best_model["model"],
             best_model["wmape"],
             best_model["bias"],
-            best_model["prediction"]
+            best_model["prediction"],
+            demand_pattern
         )
 
         narratives.append({
@@ -439,7 +473,8 @@ def predict():
         "message": "Forecast model comparison completed",
         "model_results": model_results,
         "best_models": best_models,
-        "narratives": narratives
+        "narratives": narratives,
+        "demand_patterns": demand_patterns
     })
 
 if __name__ == "__main__":
