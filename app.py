@@ -252,7 +252,62 @@ def get_random_forest_feature_importance(actuals):
         })
 
     return sorted(importance_rows, key=lambda x: x["importance"], reverse=True)
+def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows):
+    top_features = feature_rows[:4] if feature_rows else []
 
+    driver_comments = []
+
+    feature_comment_map = {
+        "lag_12": "same month last year is strongly influencing the forecast, which points to seasonal repetition",
+        "lag_6": "mid-year demand behavior is influencing the forecast",
+        "lag_6_avg": "the recent six-month average is shaping the forecast level",
+        "lag_3_avg": "recent three-month demand momentum is influencing the forecast",
+        "lag_1": "the most recent month is heavily influencing the forecast",
+        "month_of_year": "calendar month seasonality is influencing the forecast",
+        "quarter": "quarterly seasonality is influencing the forecast",
+        "year_over_year_growth": "year-over-year growth is influencing the forecast direction",
+        "recent_3_month_growth": "recent growth or slowdown is affecting the forecast",
+        "peak_month_flag": "the model recognizes this SKU has recurring peak-month behavior",
+        "post_peak_flag": "the model is accounting for demand behavior after a peak period",
+        "month_number": "the model is using the overall time trend"
+    }
+
+    for row in top_features:
+        feature = row["feature"]
+        importance = row["importance"]
+
+        driver_comments.append({
+            "feature": feature,
+            "importance": importance,
+            "interpretation": feature_comment_map.get(
+                feature,
+                "this feature is influencing the forecast"
+            )
+        })
+
+    if len(top_features) == 0:
+        summary = (
+            f"{sku} does not have enough usable machine learning feature history "
+            f"to generate a strong driver explanation."
+        )
+    else:
+        main_driver = top_features[0]["feature"]
+
+        summary = (
+            f"{sku} is classified as {demand_pattern}. "
+            f"The selected model is {best_model}. "
+            f"The strongest machine-learning driver is {main_driver}, "
+            f"meaning the forecast is being shaped mainly by "
+            f"{feature_comment_map.get(main_driver, 'the strongest available signal')}."
+        )
+
+    return {
+        "sku": sku,
+        "model": best_model,
+        "demand_pattern": demand_pattern,
+        "summary": summary,
+        "drivers": driver_comments
+    }
 def predict_random_forest_next(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
 
@@ -681,6 +736,7 @@ def predict():
     demand_patterns = []
     forecast_horizons = []
     random_forest_feature_importance = []
+    forecast_explanations = []
 
     skus = df["sku"].unique()
 
@@ -708,7 +764,7 @@ def predict():
             "reason": seasonality_reason
         })
 
-        rf_importance = get_random_forest_feature_importance(actuals)
+        rf_importance = _importance(actuals)
 
         random_forest_feature_importance.append({
             "sku": sku,
@@ -946,7 +1002,13 @@ def predict():
             "rank": best_model["rank"],
             "demand_pattern": demand_pattern
         })
-
+        forecast_explanations.append(
+            generate_forecast_explanation(
+            sku,
+            best_model["model"],
+            demand_pattern,
+            rf_importance
+       )
         horizon_values = generate_forecast_horizon(
             best_model["model"],
             actuals,
@@ -1010,6 +1072,7 @@ def predict():
         "demand_patterns": demand_patterns,
         "forecast_horizons": forecast_horizons,
         "random_forest_feature_importance": random_forest_feature_importance
+        "forecast_explanations": forecast_explanations
     })
 
 if __name__ == "__main__":
