@@ -96,13 +96,43 @@ def backtest_exponential_smoothing(actuals):
 
     return wmape, bias
 
-def backtest_linear_regression(sku_df):
+def backtest_holt_trend(actuals):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
 
+    for i in range(3, len(actuals)):
+        train = actuals[:i]
+
+        try:
+            model = ExponentialSmoothing(
+                train,
+                trend="add",
+                seasonal=None
+            )
+
+            fitted = model.fit()
+            prediction = fitted.forecast(1)[0]
+
+            forecasts.append(prediction)
+            actual_test.append(actuals[i])
+
+        except Exception:
+            continue
+
+    if len(actual_test) == 0:
+        return None, None
+
+    wmape = calculate_wmape(actual_test, forecasts)
+    bias = calculate_bias(actual_test, forecasts)
+
+    return wmape, bias
+
+def backtest_linear_regression(sku_df):
     forecasts = []
     actual_test = []
 
     for i in range(2, len(sku_df)):
-
         train = sku_df.iloc[:i]
         test = sku_df.iloc[i]
 
@@ -125,7 +155,6 @@ def backtest_linear_regression(sku_df):
 
 @app.route("/predict", methods=["POST"])
 def predict():
-
     data = request.get_json()
 
     if not data or "records" not in data:
@@ -142,7 +171,6 @@ def predict():
     skus = df["sku"].unique()
 
     for sku in skus:
-
         sku_df = df[df["sku"] == sku].copy()
 
         sku_df["month_number"] = sku_df["month_number"].astype(float)
@@ -151,29 +179,24 @@ def predict():
         sku_df = sku_df.sort_values("month_number")
 
         next_month = int(sku_df["month_number"].max()) + 1
-
         actuals = sku_df["actual_units"].tolist()
 
         # Linear Regression
         lr_model = LinearRegression()
-
         lr_model.fit(
             sku_df[["month_number"]],
             sku_df["actual_units"]
         )
 
         lr_prediction = lr_model.predict([[next_month]])[0]
-
         lr_wmape, lr_bias = backtest_linear_regression(sku_df)
 
         # Naive
         naive_prediction = actuals[-1]
-
         naive_wmape, naive_bias = backtest_naive(actuals)
 
         # 3-Month Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
-
         ma_wmape, ma_bias = backtest_moving_average(actuals, 3)
 
         # Exponential Smoothing
@@ -186,7 +209,6 @@ def predict():
 
             es_fitted = es_model.fit()
             es_prediction = es_fitted.forecast(1)[0]
-
             es_wmape, es_bias = backtest_exponential_smoothing(actuals)
 
         except Exception:
@@ -194,8 +216,24 @@ def predict():
             es_wmape = None
             es_bias = None
 
-        sku_results = [
+        # Holt Trend
+        try:
+            holt_model = ExponentialSmoothing(
+                actuals,
+                trend="add",
+                seasonal=None
+            )
 
+            holt_fitted = holt_model.fit()
+            holt_prediction = holt_fitted.forecast(1)[0]
+            holt_wmape, holt_bias = backtest_holt_trend(actuals)
+
+        except Exception:
+            holt_prediction = None
+            holt_wmape = None
+            holt_bias = None
+
+        sku_results = [
             {
                 "sku": sku,
                 "model": "Linear Regression",
@@ -205,7 +243,6 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": round(float(lr_model.coef_[0]), 2)
             },
-
             {
                 "sku": sku,
                 "model": "Naive Forecast",
@@ -215,7 +252,6 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             },
-
             {
                 "sku": sku,
                 "model": "3-Month Moving Average",
@@ -225,7 +261,6 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             },
-
             {
                 "sku": sku,
                 "model": "Exponential Smoothing",
@@ -234,8 +269,16 @@ def predict():
                 "bias": es_bias,
                 "records_used": len(sku_df),
                 "slope": None
+            },
+            {
+                "sku": sku,
+                "model": "Holt Trend",
+                "prediction": None if holt_prediction is None else round(float(holt_prediction), 2),
+                "wmape": holt_wmape,
+                "bias": holt_bias,
+                "records_used": len(sku_df),
+                "slope": None
             }
-
         ]
 
         ranked_results = sorted(
