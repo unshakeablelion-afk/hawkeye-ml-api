@@ -171,7 +171,7 @@ def backtest_holt_winters(actuals):
     forecasts = []
     actual_test = []
 
-    start_index = max(18, len(actuals) - 4)
+    start_index = max(22, len(actuals) - 2)
 
     for i in range(start_index, len(actuals)):
         train = actuals[:i]
