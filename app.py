@@ -40,17 +40,21 @@ def generate_narrative(sku, best_model, wmape, bias, prediction):
 
     trend_comment = "stable demand pattern"
 
-    if prediction > 250:
+    if prediction is not None and prediction > 250:
         trend_comment = "strong demand growth"
 
-    if wmape < 10:
+    if wmape is None:
+        accuracy_comment = "forecast accuracy is not yet available"
+    elif wmape < 10:
         accuracy_comment = "forecast accuracy is strong"
     elif wmape < 20:
         accuracy_comment = "forecast accuracy is moderate"
     else:
         accuracy_comment = "forecast accuracy needs improvement"
 
-    if abs(bias) <= 5:
+    if bias is None:
+        bias_comment = "bias is not yet available"
+    elif abs(bias) <= 5:
         bias_comment = "bias is well controlled"
     elif bias > 5:
         bias_comment = "forecast is trending toward overforecasting"
@@ -99,7 +103,9 @@ def backtest_exponential_smoothing(actuals):
     forecasts = []
     actual_test = []
 
-    for i in range(2, len(actuals)):
+    start_index = max(2, len(actuals) - 6)
+
+    for i in range(start_index, len(actuals)):
         train = actuals[:i]
 
         try:
@@ -109,7 +115,7 @@ def backtest_exponential_smoothing(actuals):
                 seasonal=None
             )
 
-            fitted = model.fit()
+            fitted = model.fit(optimized=False)
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -131,7 +137,9 @@ def backtest_holt_trend(actuals):
     forecasts = []
     actual_test = []
 
-    for i in range(3, len(actuals)):
+    start_index = max(3, len(actuals) - 6)
+
+    for i in range(start_index, len(actuals)):
         train = actuals[:i]
 
         try:
@@ -141,7 +149,7 @@ def backtest_holt_trend(actuals):
                 seasonal=None
             )
 
-            fitted = model.fit()
+            fitted = model.fit(optimized=False)
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -241,7 +249,7 @@ def predict():
                 seasonal=None
             )
 
-            es_fitted = es_model.fit()
+            es_fitted = es_model.fit(optimized=False)
             es_prediction = es_fitted.forecast(1)[0]
 
             es_wmape, es_bias = backtest_exponential_smoothing(actuals)
@@ -259,7 +267,7 @@ def predict():
                 seasonal=None
             )
 
-            holt_fitted = holt_model.fit()
+            holt_fitted = holt_model.fit(optimized=False)
             holt_prediction = holt_fitted.forecast(1)[0]
 
             holt_wmape, holt_bias = backtest_holt_trend(actuals)
@@ -268,6 +276,25 @@ def predict():
             holt_prediction = None
             holt_wmape = None
             holt_bias = None
+
+        # Holt-Winters Seasonal forecast only
+        # WMAPE and bias intentionally left null for now to avoid heavy seasonal rolling backtests.
+        try:
+            if len(actuals) >= 18:
+                hw_model = ExponentialSmoothing(
+                    actuals,
+                    trend="add",
+                    seasonal="add",
+                    seasonal_periods=12
+                )
+
+                hw_fitted = hw_model.fit(optimized=False)
+                hw_prediction = hw_fitted.forecast(1)[0]
+            else:
+                hw_prediction = None
+
+        except Exception:
+            hw_prediction = None
 
         sku_results = [
 
@@ -317,6 +344,16 @@ def predict():
                 "prediction": None if holt_prediction is None else round(float(holt_prediction), 2),
                 "wmape": holt_wmape,
                 "bias": holt_bias,
+                "records_used": len(sku_df),
+                "slope": None
+            },
+
+            {
+                "sku": sku,
+                "model": "Holt-Winters Seasonal",
+                "prediction": None if hw_prediction is None else round(float(hw_prediction), 2),
+                "wmape": None,
+                "bias": None,
                 "records_used": len(sku_df),
                 "slope": None
             }
