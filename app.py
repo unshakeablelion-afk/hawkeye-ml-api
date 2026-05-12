@@ -180,7 +180,7 @@ def backtest_holt_winters(actuals):
             model = ExponentialSmoothing(
                 train,
                 trend=None,
-                seasonal="mul",
+                seasonal="add",
                 seasonal_periods=12
             )
 
@@ -317,7 +317,7 @@ def predict():
                 hw_model = ExponentialSmoothing(
                     actuals,
                     trend=None,
-                    seasonal="mul",
+                    seasonal="add",
                     seasonal_periods=12
                 )
 
