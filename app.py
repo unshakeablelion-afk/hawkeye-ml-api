@@ -115,7 +115,7 @@ def backtest_exponential_smoothing(actuals):
                 seasonal=None
             )
 
-            fitted = model.fit(optimized=False)
+            fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -149,7 +149,7 @@ def backtest_holt_trend(actuals):
                 seasonal=None
             )
 
-            fitted = model.fit(optimized=False)
+            fitted = model.fit()
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -249,7 +249,7 @@ def predict():
                 seasonal=None
             )
 
-            es_fitted = es_model.fit(optimized=False)
+            es_fitted = es_model.fit()
             es_prediction = es_fitted.forecast(1)[0]
 
             es_wmape, es_bias = backtest_exponential_smoothing(actuals)
@@ -267,7 +267,7 @@ def predict():
                 seasonal=None
             )
 
-            holt_fitted = holt_model.fit(optimized=False)
+            holt_fitted = holt_model.fit()
             holt_prediction = holt_fitted.forecast(1)[0]
 
             holt_wmape, holt_bias = backtest_holt_trend(actuals)
@@ -288,7 +288,7 @@ def predict():
                     seasonal_periods=12
                 )
 
-                hw_fitted = hw_model.fit(optimized=False)
+                hw_fitted = hw_model.fit()
                 hw_prediction = hw_fitted.forecast(1)[0]
             else:
                 hw_prediction = None
