@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import pandas as pd
 import os
@@ -88,6 +89,95 @@ def generate_future_months(last_month_label, horizon=12):
 
     return future_months
 
+def build_ml_features_from_actuals(actuals):
+    rows = []
+    actuals = list(actuals)
+
+    for i in range(len(actuals)):
+        month_number = i + 1
+        month_of_year = ((month_number - 1) % 12) + 1
+        quarter = ((month_of_year - 1) // 3) + 1
+
+        lag_1 = actuals[i - 1] if i >= 1 else None
+        lag_3_avg = sum(actuals[i - 3:i]) / 3 if i >= 3 else None
+        lag_12 = actuals[i - 12] if i >= 12 else None
+
+        rows.append({
+            "month_number": month_number,
+            "month_of_year": month_of_year,
+            "quarter": quarter,
+            "lag_1": lag_1,
+            "lag_3_avg": lag_3_avg,
+            "lag_12": lag_12,
+            "actual_units": actuals[i]
+        })
+
+    feature_df = pd.DataFrame(rows)
+    feature_df = feature_df.dropna()
+
+    return feature_df
+
+def predict_random_forest_next(actuals):
+    feature_df = build_ml_features_from_actuals(actuals)
+
+    if len(feature_df) < 6:
+        return None
+
+    features = ["month_number", "month_of_year", "quarter", "lag_1", "lag_3_avg", "lag_12"]
+
+    model = RandomForestRegressor(
+        n_estimators=100,
+        random_state=42,
+        min_samples_leaf=1
+    )
+
+    model.fit(feature_df[features], feature_df["actual_units"])
+
+    next_month_number = len(actuals) + 1
+    next_month_of_year = ((next_month_number - 1) % 12) + 1
+    next_quarter = ((next_month_of_year - 1) // 3) + 1
+
+    next_features = pd.DataFrame([{
+        "month_number": next_month_number,
+        "month_of_year": next_month_of_year,
+        "quarter": next_quarter,
+        "lag_1": actuals[-1],
+        "lag_3_avg": sum(actuals[-3:]) / 3,
+        "lag_12": actuals[-12]
+    }])
+
+    prediction = model.predict(next_features[features])[0]
+
+    return prediction
+
+def backtest_random_forest(actuals):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    if len(actuals) < 18:
+        return None, None
+
+    for i in range(15, len(actuals)):
+        train_actuals = actuals[:i]
+
+        try:
+            prediction = predict_random_forest_next(train_actuals)
+
+            if prediction is None:
+                continue
+
+            forecasts.append(prediction)
+            actual_test.append(actuals[i])
+
+        except Exception:
+            continue
+
+    if len(actual_test) == 0:
+        return None, None
+
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
+
 def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_periods=12):
     actuals = list(actuals)
     forecasts = []
@@ -117,6 +207,18 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
             else:
                 forecasts = [actuals[-1]] * horizon
 
+        elif model_name == "Random Forest Forecast":
+            rolling_actuals = list(actuals)
+
+            for _ in range(horizon):
+                prediction = predict_random_forest_next(rolling_actuals)
+
+                if prediction is None:
+                    prediction = rolling_actuals[-1]
+
+                forecasts.append(prediction)
+                rolling_actuals.append(prediction)
+
         elif model_name == "Linear Regression":
             lr_model = LinearRegression()
             lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
@@ -135,22 +237,12 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
                 rolling_values.append(prediction)
 
         elif model_name == "Exponential Smoothing":
-            model = ExponentialSmoothing(
-                actuals,
-                trend=None,
-                seasonal=None
-            )
-
+            model = ExponentialSmoothing(actuals, trend=None, seasonal=None)
             fitted = model.fit()
             forecasts = fitted.forecast(horizon).tolist()
 
         elif model_name == "Holt Trend":
-            model = ExponentialSmoothing(
-                actuals,
-                trend="add",
-                seasonal=None
-            )
-
+            model = ExponentialSmoothing(actuals, trend="add", seasonal=None)
             fitted = model.fit()
             forecasts = fitted.forecast(horizon).tolist()
 
@@ -428,6 +520,15 @@ def predict():
         lr_prediction = lr_model.predict([[next_month]])[0]
         lr_wmape, lr_bias = backtest_linear_regression(sku_df)
 
+        # Random Forest Forecast
+        try:
+            rf_prediction = predict_random_forest_next(actuals)
+            rf_wmape, rf_bias = backtest_random_forest(actuals)
+        except Exception:
+            rf_prediction = None
+            rf_wmape = None
+            rf_bias = None
+
         # Naive
         naive_prediction = actuals[-1]
         naive_wmape, naive_bias = backtest_naive(actuals)
@@ -517,6 +618,16 @@ def predict():
                 "bias": lr_bias,
                 "records_used": len(sku_df),
                 "slope": round(float(lr_model.coef_[0]), 2),
+                "demand_pattern": demand_pattern
+            },
+            {
+                "sku": sku,
+                "model": "Random Forest Forecast",
+                "prediction": None if rf_prediction is None else round(float(rf_prediction), 2),
+                "wmape": rf_wmape,
+                "bias": rf_bias,
+                "records_used": len(sku_df),
+                "slope": None,
                 "demand_pattern": demand_pattern
             },
             {
