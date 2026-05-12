@@ -268,6 +268,17 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
 
     return [round(float(value), 2) for value in forecasts]
 
+def build_horizon_rows(months, values):
+    rows = []
+
+    for index, value in enumerate(values):
+        rows.append({
+            "month": months[index],
+            "forecast": value
+        })
+
+    return rows
+
 def generate_narrative(sku, best_model, wmape, bias, prediction, demand_pattern):
 
     trend_comment = "stable demand pattern"
@@ -753,18 +764,28 @@ def predict():
             seasonal_periods=12
         )
 
-        horizon_rows = []
+        tasn_values = generate_forecast_horizon(
+            "Trend-Adjusted Seasonal Naive",
+            actuals,
+            sku_df,
+            horizon=12,
+            seasonal_periods=12
+        )
 
-        for index, value in enumerate(horizon_values):
-            horizon_rows.append({
-                "month": future_months[index],
-                "forecast": value
-            })
+        random_forest_values = generate_forecast_horizon(
+            "Random Forest Forecast",
+            actuals,
+            sku_df,
+            horizon=12,
+            seasonal_periods=12
+        )
 
         forecast_horizons.append({
             "sku": sku,
             "model": best_model["model"],
-            "forecast": horizon_rows
+            "forecast": build_horizon_rows(future_months, horizon_values),
+            "tasn_forecast": build_horizon_rows(future_months, tasn_values),
+            "random_forest_forecast": build_horizon_rows(future_months, random_forest_values)
         })
 
         narrative = generate_narrative(
