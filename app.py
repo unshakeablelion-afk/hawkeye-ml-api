@@ -252,6 +252,7 @@ def get_random_forest_feature_importance(actuals):
         })
 
     return sorted(importance_rows, key=lambda x: x["importance"], reverse=True)
+
 def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows):
     top_features = feature_rows[:4] if feature_rows else []
 
@@ -308,6 +309,7 @@ def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows)
         "summary": summary,
         "drivers": driver_comments
     }
+
 def predict_random_forest_next(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
 
@@ -517,6 +519,28 @@ def build_horizon_rows(months, values):
         rows.append({
             "month": months[index],
             "forecast": value
+        })
+
+    return rows
+
+def build_forecast_range_rows(months, values, wmape):
+    rows = []
+
+    if wmape is None:
+        error_factor = 0.15
+    else:
+        error_factor = max(float(wmape) / 100, 0.08)
+
+    for index, value in enumerate(values):
+        p50 = float(value)
+        p10 = max(0, p50 * (1 - error_factor))
+        p90 = p50 * (1 + error_factor)
+
+        rows.append({
+            "month": months[index],
+            "p10": round(p10, 2),
+            "p50": round(p50, 2),
+            "p90": round(p90, 2)
         })
 
     return rows
@@ -1002,14 +1026,16 @@ def predict():
             "rank": best_model["rank"],
             "demand_pattern": demand_pattern
         })
+
         forecast_explanations.append(
             generate_forecast_explanation(
-            sku,
-            best_model["model"],
-            demand_pattern,
-            rf_importance
-       )
-    )
+                sku,
+                best_model["model"],
+                demand_pattern,
+                rf_importance
+            )
+        )
+
         horizon_values = generate_forecast_horizon(
             best_model["model"],
             actuals,
@@ -1033,6 +1059,7 @@ def predict():
             horizon=12,
             seasonal_periods=12
         )
+
         xgboost_values = generate_forecast_horizon(
             "XGBoost Forecast",
             actuals,
@@ -1045,6 +1072,11 @@ def predict():
             "sku": sku,
             "model": best_model["model"],
             "forecast": build_horizon_rows(future_months, horizon_values),
+            "forecast_range": build_forecast_range_rows(
+                future_months,
+                horizon_values,
+                best_model["wmape"]
+            ),
             "tasn_forecast": build_horizon_rows(future_months, tasn_values),
             "random_forest_forecast": build_horizon_rows(future_months, random_forest_values),
             "xgboost_forecast": build_horizon_rows(future_months, xgboost_values)
