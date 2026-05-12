@@ -44,15 +44,26 @@ def detect_seasonality(actuals, seasonal_periods=12):
     year_one = actuals[:seasonal_periods]
     year_two = actuals[seasonal_periods:seasonal_periods * 2]
 
-    if len(year_one) != len(year_two):
-        return False, "Insufficient matching seasonal periods"
-
     correlation = pd.Series(year_one).corr(pd.Series(year_two))
 
     if correlation is not None and correlation >= 0.70:
         return True, f"Seasonality detected with year-over-year pattern correlation of {round(float(correlation), 2)}"
 
     return False, f"No strong seasonality detected; correlation was {round(float(correlation), 2)}"
+
+def get_trend_factor(actuals, seasonal_periods=12):
+    actuals = list(actuals)
+
+    if len(actuals) < seasonal_periods * 2:
+        return 1.0
+
+    previous_year = sum(actuals[-24:-12])
+    latest_year = sum(actuals[-12:])
+
+    if previous_year == 0:
+        return 1.0
+
+    return latest_year / previous_year
 
 def generate_narrative(sku, best_model, wmape, bias, prediction, demand_pattern):
 
@@ -109,6 +120,35 @@ def backtest_seasonal_naive(actuals, seasonal_periods=12):
     for i in range(seasonal_periods, len(actuals)):
         forecasts.append(actuals[i - seasonal_periods])
         actual_test.append(actuals[i])
+
+    return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
+
+def backtest_trend_adjusted_seasonal_naive(actuals, seasonal_periods=12):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    if len(actuals) < seasonal_periods * 2:
+        return None, None
+
+    for i in range(seasonal_periods * 2, len(actuals)):
+        historical_same_month = actuals[i - seasonal_periods]
+
+        prior_year_total = sum(actuals[i - (seasonal_periods * 2):i - seasonal_periods])
+        recent_year_total = sum(actuals[i - seasonal_periods:i])
+
+        if prior_year_total == 0:
+            trend_factor = 1.0
+        else:
+            trend_factor = recent_year_total / prior_year_total
+
+        prediction = historical_same_month * trend_factor
+
+        forecasts.append(prediction)
+        actual_test.append(actuals[i])
+
+    if len(actual_test) == 0:
+        return None, None
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
@@ -258,7 +298,6 @@ def predict():
         actuals = sku_df["actual_units"].tolist()
 
         seasonality_detected, seasonality_reason = detect_seasonality(actuals)
-
         demand_pattern = "Seasonal" if seasonality_detected else "Non-seasonal / trend-stable"
 
         demand_patterns.append({
@@ -287,6 +326,18 @@ def predict():
             seasonal_naive_prediction = None
             seasonal_naive_wmape = None
             seasonal_naive_bias = None
+
+        # Trend-Adjusted Seasonal Naive
+        if len(actuals) >= 24:
+            trend_factor = get_trend_factor(actuals, 12)
+            trend_adjusted_seasonal_naive_prediction = actuals[-12] * trend_factor
+
+            tasn_wmape, tasn_bias = backtest_trend_adjusted_seasonal_naive(actuals, 12)
+        else:
+            trend_factor = None
+            trend_adjusted_seasonal_naive_prediction = None
+            tasn_wmape = None
+            tasn_bias = None
 
         # Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
@@ -376,6 +427,17 @@ def predict():
             },
             {
                 "sku": sku,
+                "model": "Trend-Adjusted Seasonal Naive",
+                "prediction": None if trend_adjusted_seasonal_naive_prediction is None else round(float(trend_adjusted_seasonal_naive_prediction), 2),
+                "wmape": tasn_wmape,
+                "bias": tasn_bias,
+                "records_used": len(sku_df),
+                "slope": None,
+                "demand_pattern": demand_pattern,
+                "trend_factor": None if trend_factor is None else round(float(trend_factor), 3)
+            },
+            {
+                "sku": sku,
                 "model": "3-Month Moving Average",
                 "prediction": round(float(ma_prediction), 2),
                 "wmape": ma_wmape,
@@ -421,7 +483,11 @@ def predict():
         else:
             ranked_candidates = [
                 result for result in sku_results
-                if result["model"] not in ["Seasonal Naive Forecast", "Holt-Winters Seasonal"]
+                if result["model"] not in [
+                    "Seasonal Naive Forecast",
+                    "Trend-Adjusted Seasonal Naive",
+                    "Holt-Winters Seasonal"
+                ]
             ]
 
         ranked_results = sorted(
