@@ -51,11 +51,8 @@ def backtest_linear_regression(sku_df):
         train = sku_df.iloc[:i]
         test = sku_df.iloc[i]
 
-        X_train = train[["month_number"]]
-        y_train = train["actual_units"]
-
         model = LinearRegression()
-        model.fit(X_train, y_train)
+        model.fit(train[["month_number"]], train["actual_units"])
 
         prediction = model.predict([[test["month_number"]]])[0]
 
@@ -93,17 +90,15 @@ def predict():
         next_month = int(sku_df["month_number"].max()) + 1
         actuals = sku_df["actual_units"].tolist()
 
-        # Linear Regression future forecast
         lr_model = LinearRegression()
         lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
+
         lr_prediction = lr_model.predict([[next_month]])[0]
         lr_wmape = backtest_linear_regression(sku_df)
 
-        # Naive future forecast
         naive_prediction = actuals[-1]
         naive_wmape = backtest_naive(actuals)
 
-        # 3-Month Moving Average future forecast
         ma_prediction = sum(actuals[-3:]) / 3
         ma_wmape = backtest_moving_average(actuals, 3)
 
@@ -134,18 +129,24 @@ def predict():
             }
         ]
 
-        model_results.extend(sku_results)
-
-        best_model = min(
+        ranked_results = sorted(
             sku_results,
             key=lambda x: x["wmape"] if x["wmape"] is not None else 999999
         )
+
+        for index, result in enumerate(ranked_results, start=1):
+            result["rank"] = index
+
+        model_results.extend(ranked_results)
+
+        best_model = ranked_results[0]
 
         best_models.append({
             "sku": sku,
             "best_model": best_model["model"],
             "prediction": best_model["prediction"],
-            "wmape": best_model["wmape"]
+            "wmape": best_model["wmape"],
+            "rank": best_model["rank"]
         })
 
     return jsonify({
