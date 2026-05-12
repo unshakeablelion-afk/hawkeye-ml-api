@@ -1,7 +1,11 @@
 from flask import Flask, jsonify, request
 from sklearn.linear_model import LinearRegression
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import pandas as pd
 import os
+import warnings
+
+warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 
@@ -54,6 +58,38 @@ def backtest_moving_average(actuals, window=3):
     for i in range(window, len(actuals)):
         forecasts.append(sum(actuals[i-window:i]) / window)
         actual_test.append(actuals[i])
+
+    wmape = calculate_wmape(actual_test, forecasts)
+    bias = calculate_bias(actual_test, forecasts)
+
+    return wmape, bias
+
+def backtest_exponential_smoothing(actuals):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    for i in range(2, len(actuals)):
+        train = actuals[:i]
+
+        try:
+            model = ExponentialSmoothing(
+                train,
+                trend=None,
+                seasonal=None
+            )
+
+            fitted = model.fit()
+            prediction = fitted.forecast(1)[0]
+
+            forecasts.append(prediction)
+            actual_test.append(actuals[i])
+
+        except Exception:
+            continue
+
+    if len(actual_test) == 0:
+        return None, None
 
     wmape = calculate_wmape(actual_test, forecasts)
     bias = calculate_bias(actual_test, forecasts)
@@ -135,10 +171,28 @@ def predict():
 
         naive_wmape, naive_bias = backtest_naive(actuals)
 
-        # Moving Average
+        # 3-Month Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
 
         ma_wmape, ma_bias = backtest_moving_average(actuals, 3)
+
+        # Exponential Smoothing
+        try:
+            es_model = ExponentialSmoothing(
+                actuals,
+                trend=None,
+                seasonal=None
+            )
+
+            es_fitted = es_model.fit()
+            es_prediction = es_fitted.forecast(1)[0]
+
+            es_wmape, es_bias = backtest_exponential_smoothing(actuals)
+
+        except Exception:
+            es_prediction = None
+            es_wmape = None
+            es_bias = None
 
         sku_results = [
 
@@ -168,6 +222,16 @@ def predict():
                 "prediction": round(float(ma_prediction), 2),
                 "wmape": ma_wmape,
                 "bias": ma_bias,
+                "records_used": len(sku_df),
+                "slope": None
+            },
+
+            {
+                "sku": sku,
+                "model": "Exponential Smoothing",
+                "prediction": None if es_prediction is None else round(float(es_prediction), 2),
+                "wmape": es_wmape,
+                "bias": es_bias,
                 "records_used": len(sku_df),
                 "slope": None
             }
