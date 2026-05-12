@@ -184,7 +184,7 @@ def backtest_holt_winters(actuals):
                 seasonal_periods=12
             )
 
-            fitted = model.fit()
+            fitted = model.fit(optimized=False)
             prediction = fitted.forecast(1)[0]
 
             forecasts.append(prediction)
@@ -321,7 +321,7 @@ def predict():
                     seasonal_periods=12
                 )
 
-                hw_fitted = hw_model.fit()
+                hw_fitted = hw_model.fit(optimized=False)
                 hw_prediction = hw_fitted.forecast(1)[0]
 
                 hw_wmape, hw_bias = backtest_holt_winters(actuals)
