@@ -10,6 +10,21 @@ warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 
+RF_FEATURES = [
+    "month_number",
+    "month_of_year",
+    "quarter",
+    "lag_1",
+    "lag_3_avg",
+    "lag_6",
+    "lag_6_avg",
+    "lag_12",
+    "year_over_year_growth",
+    "recent_3_month_growth",
+    "peak_month_flag",
+    "post_peak_flag"
+]
+
 @app.route("/")
 def home():
     return jsonify({
@@ -89,18 +104,69 @@ def generate_future_months(last_month_label, horizon=12):
 
     return future_months
 
+def get_peak_months(actuals):
+    actuals = list(actuals)
+
+    if len(actuals) < 12:
+        return []
+
+    rows = []
+
+    for i, value in enumerate(actuals):
+        month_number = i + 1
+        month_of_year = ((month_number - 1) % 12) + 1
+
+        rows.append({
+            "month_of_year": month_of_year,
+            "actual_units": value
+        })
+
+    df = pd.DataFrame(rows)
+
+    monthly_avg = (
+        df.groupby("month_of_year")["actual_units"]
+        .mean()
+        .sort_values(ascending=False)
+    )
+
+    return list(monthly_avg.head(2).index)
+
+def safe_growth(current_value, prior_value):
+    if prior_value is None or prior_value == 0:
+        return 0
+
+    return (current_value - prior_value) / prior_value
+
 def build_ml_features_from_actuals(actuals):
     rows = []
     actuals = list(actuals)
+    peak_months = get_peak_months(actuals)
 
     for i in range(len(actuals)):
         month_number = i + 1
         month_of_year = ((month_number - 1) % 12) + 1
         quarter = ((month_of_year - 1) // 3) + 1
 
+        previous_month_of_year = 12 if month_of_year == 1 else month_of_year - 1
+
         lag_1 = actuals[i - 1] if i >= 1 else None
         lag_3_avg = sum(actuals[i - 3:i]) / 3 if i >= 3 else None
+        lag_6 = actuals[i - 6] if i >= 6 else None
+        lag_6_avg = sum(actuals[i - 6:i]) / 6 if i >= 6 else None
         lag_12 = actuals[i - 12] if i >= 12 else None
+
+        year_over_year_growth = None
+        if i >= 12 and lag_12 is not None:
+            year_over_year_growth = safe_growth(actuals[i], lag_12)
+
+        recent_3_month_growth = None
+        if i >= 6:
+            recent_3_avg = sum(actuals[i - 3:i]) / 3
+            prior_3_avg = sum(actuals[i - 6:i - 3]) / 3
+            recent_3_month_growth = safe_growth(recent_3_avg, prior_3_avg)
+
+        peak_month_flag = 1 if month_of_year in peak_months else 0
+        post_peak_flag = 1 if previous_month_of_year in peak_months else 0
 
         rows.append({
             "month_number": month_number,
@@ -108,7 +174,13 @@ def build_ml_features_from_actuals(actuals):
             "quarter": quarter,
             "lag_1": lag_1,
             "lag_3_avg": lag_3_avg,
+            "lag_6": lag_6,
+            "lag_6_avg": lag_6_avg,
             "lag_12": lag_12,
+            "year_over_year_growth": year_over_year_growth,
+            "recent_3_month_growth": recent_3_month_growth,
+            "peak_month_flag": peak_month_flag,
+            "post_peak_flag": post_peak_flag,
             "actual_units": actuals[i]
         })
 
@@ -117,27 +189,62 @@ def build_ml_features_from_actuals(actuals):
 
     return feature_df
 
+def build_next_random_forest_features(actuals):
+    actuals = list(actuals)
+    peak_months = get_peak_months(actuals)
+
+    next_month_number = len(actuals) + 1
+    next_month_of_year = ((next_month_number - 1) % 12) + 1
+    next_quarter = ((next_month_of_year - 1) // 3) + 1
+    previous_month_of_year = 12 if next_month_of_year == 1 else next_month_of_year - 1
+
+    lag_1 = actuals[-1]
+    lag_3_avg = sum(actuals[-3:]) / 3
+    lag_6 = actuals[-6]
+    lag_6_avg = sum(actuals[-6:]) / 6
+    lag_12 = actuals[-12]
+
+    recent_3_avg = sum(actuals[-3:]) / 3
+    prior_3_avg = sum(actuals[-6:-3]) / 3
+
+    year_over_year_growth = safe_growth(lag_1, actuals[-13]) if len(actuals) >= 13 else 0
+    recent_3_month_growth = safe_growth(recent_3_avg, prior_3_avg)
+
+    peak_month_flag = 1 if next_month_of_year in peak_months else 0
+    post_peak_flag = 1 if previous_month_of_year in peak_months else 0
+
+    return pd.DataFrame([{
+        "month_number": next_month_number,
+        "month_of_year": next_month_of_year,
+        "quarter": next_quarter,
+        "lag_1": lag_1,
+        "lag_3_avg": lag_3_avg,
+        "lag_6": lag_6,
+        "lag_6_avg": lag_6_avg,
+        "lag_12": lag_12,
+        "year_over_year_growth": year_over_year_growth,
+        "recent_3_month_growth": recent_3_month_growth,
+        "peak_month_flag": peak_month_flag,
+        "post_peak_flag": post_peak_flag
+    }])
+
 def get_random_forest_feature_importance(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
 
     if len(feature_df) < 6:
         return []
 
-    features = ["month_number", "month_of_year", "quarter", "lag_1", "lag_3_avg", "lag_12"]
-
     model = RandomForestRegressor(
-        n_estimators=100,
+        n_estimators=200,
         random_state=42,
         min_samples_leaf=1
     )
 
-    model.fit(feature_df[features], feature_df["actual_units"])
-
-    importances = model.feature_importances_
+    model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
 
     importance_rows = []
 
-    for feature, importance in zip(features, importances):
+    for feature, importance in zip(RF_FEATURES, model.feature_importances_):
         importance_rows.append({
             "feature": feature,
             "importance": round(float(importance) * 100, 2)
@@ -154,33 +261,20 @@ def get_random_forest_feature_importance(actuals):
 def predict_random_forest_next(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
 
-    if len(feature_df) < 6:
+    if len(feature_df) < 6 or len(actuals) < 13:
         return None
 
-    features = ["month_number", "month_of_year", "quarter", "lag_1", "lag_3_avg", "lag_12"]
-
     model = RandomForestRegressor(
-        n_estimators=100,
+        n_estimators=200,
         random_state=42,
         min_samples_leaf=1
     )
 
-    model.fit(feature_df[features], feature_df["actual_units"])
+    model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
 
-    next_month_number = len(actuals) + 1
-    next_month_of_year = ((next_month_number - 1) % 12) + 1
-    next_quarter = ((next_month_of_year - 1) // 3) + 1
+    next_features = build_next_random_forest_features(actuals)
 
-    next_features = pd.DataFrame([{
-        "month_number": next_month_number,
-        "month_of_year": next_month_of_year,
-        "quarter": next_quarter,
-        "lag_1": actuals[-1],
-        "lag_3_avg": sum(actuals[-3:]) / 3,
-        "lag_12": actuals[-12]
-    }])
-
-    prediction = model.predict(next_features[features])[0]
+    prediction = model.predict(next_features[RF_FEATURES])[0]
 
     return prediction
 
