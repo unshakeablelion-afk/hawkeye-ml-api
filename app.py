@@ -983,7 +983,7 @@ def predict():
             "model": best_model["model"],
             "forecast": build_horizon_rows(future_months, horizon_values),
             "tasn_forecast": build_horizon_rows(future_months, tasn_values),
-            "random_forest_forecast": build_horizon_rows(future_months, random_forest_values)
+            "random_forest_forecast": build_horizon_rows(future_months, random_forest_values),
             "xgboost_forecast": build_horizon_rows(future_months, xgboost_values)
         })
 
