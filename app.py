@@ -36,6 +36,36 @@ def calculate_bias(actual, forecast):
 
     return round(bias, 2)
 
+def generate_narrative(sku, best_model, wmape, bias, prediction):
+
+    trend_comment = "stable demand pattern"
+
+    if prediction > 250:
+        trend_comment = "strong demand growth"
+
+    if wmape < 10:
+        accuracy_comment = "forecast accuracy is strong"
+    elif wmape < 20:
+        accuracy_comment = "forecast accuracy is moderate"
+    else:
+        accuracy_comment = "forecast accuracy needs improvement"
+
+    if abs(bias) <= 5:
+        bias_comment = "bias is well controlled"
+    elif bias > 5:
+        bias_comment = "forecast is trending toward overforecasting"
+    else:
+        bias_comment = "forecast is trending toward underforecasting"
+
+    narrative = (
+        f"{sku} shows {trend_comment}. "
+        f"{best_model} is currently the best performing model "
+        f"with {wmape}% WMAPE and {bias}% bias. "
+        f"{accuracy_comment.capitalize()} and {bias_comment}."
+    )
+
+    return narrative
+
 def backtest_naive(actuals):
     actuals = list(actuals)
     forecasts = []
@@ -155,6 +185,7 @@ def backtest_linear_regression(sku_df):
 
 @app.route("/predict", methods=["POST"])
 def predict():
+
     data = request.get_json()
 
     if not data or "records" not in data:
@@ -167,10 +198,12 @@ def predict():
 
     model_results = []
     best_models = []
+    narratives = []
 
     skus = df["sku"].unique()
 
     for sku in skus:
+
         sku_df = df[df["sku"] == sku].copy()
 
         sku_df["month_number"] = sku_df["month_number"].astype(float)
@@ -183,6 +216,7 @@ def predict():
 
         # Linear Regression
         lr_model = LinearRegression()
+
         lr_model.fit(
             sku_df[["month_number"]],
             sku_df["actual_units"]
@@ -195,7 +229,7 @@ def predict():
         naive_prediction = actuals[-1]
         naive_wmape, naive_bias = backtest_naive(actuals)
 
-        # 3-Month Moving Average
+        # Moving Average
         ma_prediction = sum(actuals[-3:]) / 3
         ma_wmape, ma_bias = backtest_moving_average(actuals, 3)
 
@@ -209,6 +243,7 @@ def predict():
 
             es_fitted = es_model.fit()
             es_prediction = es_fitted.forecast(1)[0]
+
             es_wmape, es_bias = backtest_exponential_smoothing(actuals)
 
         except Exception:
@@ -226,6 +261,7 @@ def predict():
 
             holt_fitted = holt_model.fit()
             holt_prediction = holt_fitted.forecast(1)[0]
+
             holt_wmape, holt_bias = backtest_holt_trend(actuals)
 
         except Exception:
@@ -234,6 +270,7 @@ def predict():
             holt_bias = None
 
         sku_results = [
+
             {
                 "sku": sku,
                 "model": "Linear Regression",
@@ -243,6 +280,7 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": round(float(lr_model.coef_[0]), 2)
             },
+
             {
                 "sku": sku,
                 "model": "Naive Forecast",
@@ -252,6 +290,7 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             },
+
             {
                 "sku": sku,
                 "model": "3-Month Moving Average",
@@ -261,6 +300,7 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             },
+
             {
                 "sku": sku,
                 "model": "Exponential Smoothing",
@@ -270,6 +310,7 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             },
+
             {
                 "sku": sku,
                 "model": "Holt Trend",
@@ -279,6 +320,7 @@ def predict():
                 "records_used": len(sku_df),
                 "slope": None
             }
+
         ]
 
         ranked_results = sorted(
@@ -302,11 +344,25 @@ def predict():
             "rank": best_model["rank"]
         })
 
+        narrative = generate_narrative(
+            sku,
+            best_model["model"],
+            best_model["wmape"],
+            best_model["bias"],
+            best_model["prediction"]
+        )
+
+        narratives.append({
+            "sku": sku,
+            "narrative": narrative
+        })
+
     return jsonify({
         "status": "success",
         "message": "Forecast model comparison completed",
         "model_results": model_results,
-        "best_models": best_models
+        "best_models": best_models,
+        "narratives": narratives
     })
 
 if __name__ == "__main__":
