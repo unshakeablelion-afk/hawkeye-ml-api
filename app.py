@@ -764,7 +764,7 @@ def predict():
             "reason": seasonality_reason
         })
 
-        rf_importance = _importance(actuals)
+        rf_importance = get_random_forest_feature_importance(actuals)
 
         random_forest_feature_importance.append({
             "sku": sku,
@@ -1009,6 +1009,7 @@ def predict():
             demand_pattern,
             rf_importance
        )
+    )
         horizon_values = generate_forecast_horizon(
             best_model["model"],
             actuals,
@@ -1071,7 +1072,7 @@ def predict():
         "narratives": narratives,
         "demand_patterns": demand_patterns,
         "forecast_horizons": forecast_horizons,
-        "random_forest_feature_importance": random_forest_feature_importance
+        "random_forest_feature_importance": random_forest_feature_importance,
         "forecast_explanations": forecast_explanations
     })
 
