@@ -117,6 +117,40 @@ def build_ml_features_from_actuals(actuals):
 
     return feature_df
 
+def get_random_forest_feature_importance(actuals):
+    feature_df = build_ml_features_from_actuals(actuals)
+
+    if len(feature_df) < 6:
+        return []
+
+    features = ["month_number", "month_of_year", "quarter", "lag_1", "lag_3_avg", "lag_12"]
+
+    model = RandomForestRegressor(
+        n_estimators=100,
+        random_state=42,
+        min_samples_leaf=1
+    )
+
+    model.fit(feature_df[features], feature_df["actual_units"])
+
+    importances = model.feature_importances_
+
+    importance_rows = []
+
+    for feature, importance in zip(features, importances):
+        importance_rows.append({
+            "feature": feature,
+            "importance": round(float(importance) * 100, 2)
+        })
+
+    importance_rows = sorted(
+        importance_rows,
+        key=lambda x: x["importance"],
+        reverse=True
+    )
+
+    return importance_rows
+
 def predict_random_forest_next(actuals):
     feature_df = build_ml_features_from_actuals(actuals)
 
@@ -496,6 +530,7 @@ def predict():
     narratives = []
     demand_patterns = []
     forecast_horizons = []
+    random_forest_feature_importance = []
 
     skus = df["sku"].unique()
 
@@ -522,6 +557,13 @@ def predict():
             "demand_pattern": demand_pattern,
             "seasonality_detected": seasonality_detected,
             "reason": seasonality_reason
+        })
+
+        rf_importance = get_random_forest_feature_importance(actuals)
+
+        random_forest_feature_importance.append({
+            "sku": sku,
+            "features": rf_importance
         })
 
         # Linear Regression
@@ -809,7 +851,8 @@ def predict():
         "best_models": best_models,
         "narratives": narratives,
         "demand_patterns": demand_patterns,
-        "forecast_horizons": forecast_horizons
+        "forecast_horizons": forecast_horizons,
+        "random_forest_feature_importance": random_forest_feature_importance
     })
 
 if __name__ == "__main__":
