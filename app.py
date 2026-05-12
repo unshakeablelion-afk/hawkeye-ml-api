@@ -166,6 +166,41 @@ def backtest_holt_trend(actuals):
 
     return wmape, bias
 
+def backtest_holt_winters(actuals):
+    actuals = list(actuals)
+    forecasts = []
+    actual_test = []
+
+    start_index = max(18, len(actuals) - 4)
+
+    for i in range(start_index, len(actuals)):
+        train = actuals[:i]
+
+        try:
+            model = ExponentialSmoothing(
+                train,
+                trend="add",
+                seasonal="add",
+                seasonal_periods=12
+            )
+
+            fitted = model.fit()
+            prediction = fitted.forecast(1)[0]
+
+            forecasts.append(prediction)
+            actual_test.append(actuals[i])
+
+        except Exception:
+            continue
+
+    if len(actual_test) == 0:
+        return None, None
+
+    wmape = calculate_wmape(actual_test, forecasts)
+    bias = calculate_bias(actual_test, forecasts)
+
+    return wmape, bias
+
 def backtest_linear_regression(sku_df):
     forecasts = []
     actual_test = []
@@ -224,7 +259,6 @@ def predict():
 
         # Linear Regression
         lr_model = LinearRegression()
-
         lr_model.fit(
             sku_df[["month_number"]],
             sku_df["actual_units"]
@@ -277,8 +311,7 @@ def predict():
             holt_wmape = None
             holt_bias = None
 
-        # Holt-Winters Seasonal forecast only
-        # WMAPE and bias intentionally left null for now to avoid heavy seasonal rolling backtests.
+        # Holt-Winters Seasonal
         try:
             if len(actuals) >= 18:
                 hw_model = ExponentialSmoothing(
@@ -290,11 +323,18 @@ def predict():
 
                 hw_fitted = hw_model.fit()
                 hw_prediction = hw_fitted.forecast(1)[0]
+
+                hw_wmape, hw_bias = backtest_holt_winters(actuals)
+
             else:
                 hw_prediction = None
+                hw_wmape = None
+                hw_bias = None
 
         except Exception:
             hw_prediction = None
+            hw_wmape = None
+            hw_bias = None
 
         sku_results = [
 
@@ -352,8 +392,8 @@ def predict():
                 "sku": sku,
                 "model": "Holt-Winters Seasonal",
                 "prediction": None if hw_prediction is None else round(float(hw_prediction), 2),
-                "wmape": None,
-                "bias": None,
+                "wmape": hw_wmape,
+                "bias": hw_bias,
                 "records_used": len(sku_df),
                 "slope": None
             }
