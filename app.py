@@ -81,6 +81,32 @@ def home():
         "message": "HawkEye ML API is running"
     })
 
+@app.route("/test-db")
+def test_db():
+
+    try:
+        connection = get_db_connection()
+
+        cursor = connection.cursor()
+
+        cursor.execute("SELECT 1")
+
+        result = cursor.fetchone()
+
+        cursor.close()
+        connection.close()
+
+        return jsonify({
+            "status": "success",
+            "database_connected": True,
+            "result": result[0]
+        })
+
+    except Exception as error:
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
 
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
