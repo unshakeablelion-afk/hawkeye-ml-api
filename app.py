@@ -1095,6 +1095,12 @@ def predict():
     forecast_range_reliability = []
 
     skus = df["sku"].unique()
+    run_name = f"Forecast Run - {pd.Timestamp.now()}"
+
+    run_id = save_forecast_run(
+        run_name=run_name,
+        sku_count=len(skus)
+    )
 
     for sku in skus:
         sku_df = df[df["sku"] == sku].copy()
