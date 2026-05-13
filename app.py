@@ -185,6 +185,36 @@ def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_val
     cursor.close()
     connection.close()
 
+def save_model_results_bulk(run_id, results):
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_model_results
+    (run_id, sku, model, prediction, wmape, bias, rank_value)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+
+    rows = []
+
+    for result in results:
+        rows.append((
+            run_id,
+            result["sku"],
+            result["model"],
+            result["prediction"],
+            result["wmape"],
+            result["bias"],
+            str(result["rank"])
+        ))
+
+    cursor.executemany(sql, rows)
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
@@ -1379,16 +1409,10 @@ def predict():
 
         model_results.extend(ranked_results + unranked_results)
 
-        for result in ranked_results + unranked_results:
-            save_model_result(
-               run_id=run_id,
-               sku=result["sku"],
-               model_name=result["model"],
-               prediction=result["prediction"],
-               wmape=result["wmape"],
-               bias=result["bias"],
-               rank_value=result["rank"]
-            )
+        save_model_results_bulk(
+            run_id=run_id,
+            results=ranked_results + unranked_results
+        )
         
         best_model = ranked_results[0]
 
