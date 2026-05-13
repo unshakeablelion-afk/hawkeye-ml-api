@@ -7,6 +7,7 @@ import pandas as pd
 import math
 import os
 import warnings
+import mysql.connector
 
 warnings.filterwarnings("ignore")
 
@@ -57,8 +58,22 @@ RF_FEATURES = [
     "peak_month_flag",
     "post_peak_flag"
 ]
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST"),
+    "user": os.environ.get("DB_USER"),
+    "password": os.environ.get("DB_PASSWORD"),
+    "database": os.environ.get("DB_NAME")
+}
 
 
+def get_db_connection():
+    return mysql.connector.connect(
+        host=DB_CONFIG["host"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"],
+        database=DB_CONFIG["database"]
+    )
+    
 @app.route("/")
 def home():
     return jsonify({
