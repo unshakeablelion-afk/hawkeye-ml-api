@@ -159,6 +159,32 @@ def save_forecast_run(run_name, sku_count):
 
     return run_id
 
+def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_value):
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_model_results
+    (run_id, sku, model_name, prediction, wmape, bias, rank_value)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+
+    cursor.execute(sql, (
+        run_id,
+        sku,
+        model_name,
+        prediction,
+        wmape,
+        bias,
+        str(rank_value)
+    ))
+
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
