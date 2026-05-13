@@ -166,7 +166,7 @@ def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_val
 
     sql = """
     INSERT INTO forecast_model_results
-    (run_id, sku, model_name, prediction, wmape, bias, rank_value)
+    (run_id, sku, model, prediction, wmape, bias, rank_value)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
 
