@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -12,6 +13,7 @@ import mysql.connector
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
+CORS(app)
 
 
 def clean_for_json(value):
