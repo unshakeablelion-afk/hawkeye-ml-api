@@ -215,6 +215,55 @@ def save_model_results_bulk(run_id, results):
     cursor.close()
     connection.close()
 
+@app.route("/compare-runs")
+def compare_runs():
+
+    run_a = request.args.get("run_a")
+    run_b = request.args.get("run_b")
+
+    if not run_a or not run_b:
+        return jsonify({
+            "status": "error",
+            "message": "Please provide run_a and run_b. Example: /compare-runs?run_a=4&run_b=6"
+        }), 400
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        sql = """
+        SELECT
+            run_id,
+            sku,
+            model,
+            prediction,
+            wmape,
+            bias,
+            rank_value
+        FROM forecast_model_results
+        WHERE run_id IN (%s, %s)
+        ORDER BY sku, model, run_id
+        """
+
+        cursor.execute(sql, (run_a, run_b))
+        rows = cursor.fetchall()
+
+        cursor.close()
+        connection.close()
+
+        return jsonify(clean_for_json({
+            "status": "success",
+            "run_a": run_a,
+            "run_b": run_b,
+            "results": rows
+        }))
+
+    except Exception as error:
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
+
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
