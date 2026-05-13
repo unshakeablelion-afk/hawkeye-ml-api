@@ -1,4 +1,4 @@
-   from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -443,7 +443,9 @@ def backtest_random_forest(actuals):
         return None, None
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
-    def backtest_xgboost(actuals):
+
+
+def backtest_xgboost(actuals):
     actuals = list(actuals)
     forecasts = []
     actual_test = []
@@ -968,7 +970,9 @@ def backtest_linear_regression(sku_df):
         actual_test.append(float(test["actual_units"]))
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
-    @app.route("/predict", methods=["POST"])
+
+
+@app.route("/predict", methods=["POST"])
 def predict():
     data = request.get_json()
 
