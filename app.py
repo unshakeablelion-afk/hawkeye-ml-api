@@ -570,8 +570,8 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
     if residuals and len(residuals) >= 3:
         residual_series = pd.Series(residuals).astype(float)
 
-        p10_residual = residual_series.quantile(0.10)
-        p90_residual = residual_series.quantile(0.90)
+        p10_residual = float(residual_series.quantile(0.10))
+        p90_residual = float(residual_series.quantile(0.90))
 
         for index, value in enumerate(values):
             p50 = float(value)
@@ -579,15 +579,15 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
             p90 = max(0, p50 + p90_residual)
 
             rows.append({
-                "month": months[index],
-                "p10": round(p10, 2),
-                "p50": round(p50, 2),
-                "p90": round(p90, 2),
+                "month": str(months[index]),
+                "p10": round(float(p10), 2),
+                "p50": round(float(p50), 2),
+                "p90": round(float(p90), 2),
                 "range_method": "Residual percentile"
             })
 
     else:
-        error_factor = get_error_factor(wmape)
+        error_factor = float(get_error_factor(wmape))
 
         for index, value in enumerate(values):
             p50 = float(value)
@@ -595,10 +595,10 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
             p90 = p50 * (1 + error_factor)
 
             rows.append({
-                "month": months[index],
-                "p10": round(p10, 2),
-                "p50": round(p50, 2),
-                "p90": round(p90, 2),
+                "month": str(months[index]),
+                "p10": round(float(p10), 2),
+                "p50": round(float(p50), 2),
+                "p90": round(float(p90), 2),
                 "range_method": "WMAPE fallback"
             })
 
@@ -623,11 +623,19 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
     inside_count = 0
     outside_count = 0
 
+    if residuals and len(residuals) >= 3:
+        residual_series = pd.Series(residuals).astype(float)
+        p10_residual = float(residual_series.quantile(0.10))
+        p90_residual = float(residual_series.quantile(0.90))
+    else:
+        p10_residual = None
+        p90_residual = None
+
     for i in range(start_index, len(actuals)):
         train_actuals = actuals[:i]
         train_sku_df = sku_df.iloc[:i].copy()
         actual_value = float(actuals[i])
-        month_label = sku_df.iloc[i]["month"]
+        month_label = str(sku_df.iloc[i]["month"])
 
         try:
             forecast_values = generate_forecast_horizon(
@@ -643,18 +651,17 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
 
             p50 = float(forecast_values[0])
 
-            if residuals and len(residuals) >= 3:
-                residual_series = pd.Series(residuals).astype(float)
-                p10 = max(0, p50 + residual_series.quantile(0.10))
-                p90 = max(0, p50 + residual_series.quantile(0.90))
+            if p10_residual is not None and p90_residual is not None:
+                p10 = max(0, p50 + p10_residual)
+                p90 = max(0, p50 + p90_residual)
                 range_method = "Residual percentile"
             else:
-                error_factor = get_error_factor(wmape)
+                error_factor = float(get_error_factor(wmape))
                 p10 = max(0, p50 * (1 - error_factor))
                 p90 = p50 * (1 + error_factor)
                 range_method = "WMAPE fallback"
 
-            inside_range = p10 <= actual_value <= p90
+            inside_range = bool(p10 <= actual_value <= p90)
 
             if inside_range:
                 inside_count += 1
@@ -663,10 +670,10 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
 
             details.append({
                 "month": month_label,
-                "actual": round(actual_value, 2),
-                "p10": round(p10, 2),
-                "p50": round(p50, 2),
-                "p90": round(p90, 2),
+                "actual": round(float(actual_value), 2),
+                "p10": round(float(p10), 2),
+                "p50": round(float(p50), 2),
+                "p90": round(float(p90), 2),
                 "inside_range": inside_range,
                 "range_method": range_method
             })
@@ -680,7 +687,7 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
         coverage = None
         status = "No valid reliability test"
     else:
-        coverage = round((inside_count / months_tested) * 100, 2)
+        coverage = round(float((inside_count / months_tested) * 100), 2)
 
         if coverage < 70:
             status = "Too narrow / high risk"
@@ -691,45 +698,12 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
 
     return {
         "coverage": coverage,
-        "months_tested": months_tested,
-        "inside_count": inside_count,
-        "outside_count": outside_count,
+        "months_tested": int(months_tested),
+        "inside_count": int(inside_count),
+        "outside_count": int(outside_count),
         "status": status,
         "details": details
     }
-
-def generate_narrative(sku, best_model, wmape, bias, prediction, demand_pattern):
-    trend_comment = "stable demand pattern"
-
-    if prediction is not None and prediction > 250:
-        trend_comment = "strong demand growth"
-
-    if wmape is None:
-        accuracy_comment = "forecast accuracy is not yet available"
-    elif wmape < 10:
-        accuracy_comment = "forecast accuracy is strong"
-    elif wmape < 20:
-        accuracy_comment = "forecast accuracy is moderate"
-    else:
-        accuracy_comment = "forecast accuracy needs improvement"
-
-    if bias is None:
-        bias_comment = "bias is not yet available"
-    elif abs(bias) <= 5:
-        bias_comment = "bias is well controlled"
-    elif bias > 5:
-        bias_comment = "forecast is trending toward overforecasting"
-    else:
-        bias_comment = "forecast is trending toward underforecasting"
-
-    return (
-        f"{sku} is classified as {demand_pattern}. "
-        f"{sku} shows {trend_comment}. "
-        f"{best_model} is currently the best performing model "
-        f"with {wmape}% WMAPE and {bias}% bias. "
-        f"{accuracy_comment.capitalize()} and {bias_comment}."
-    )
-
 def backtest_naive(actuals):
     actuals = list(actuals)
     forecasts = []
