@@ -10,6 +10,13 @@ import warnings
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
+@app.errorhandler(Exception)
+def handle_exception(error):
+    return jsonify({
+        "status": "error",
+        "message": str(error),
+        "error_type": type(error).__name__
+    }), 500
 
 RF_FEATURES = [
     "month_number",
