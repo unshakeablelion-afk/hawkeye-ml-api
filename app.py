@@ -86,11 +86,9 @@ def test_db():
 
     try:
         connection = get_db_connection()
-
         cursor = connection.cursor()
 
         cursor.execute("SELECT 1")
-
         result = cursor.fetchone()
 
         cursor.close()
@@ -107,43 +105,60 @@ def test_db():
             "status": "error",
             "message": str(error)
         }), 500
-@app.route("/test-tables")
 
+
+@app.route("/test-tables")
 def test_tables():
 
     try:
-
         connection = get_db_connection()
-
         cursor = connection.cursor()
 
         cursor.execute("SHOW TABLES")
-
         tables = cursor.fetchall()
 
         cursor.close()
-
         connection.close()
 
         table_names = [table[0] for table in tables]
 
         return jsonify({
-
             "status": "success",
-
             "tables": table_names
-
         })
 
     except Exception as error:
-
         return jsonify({
-
             "status": "error",
-
             "message": str(error)
-
         }), 500
+
+
+def save_forecast_run(run_name, sku_count):
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_runs
+    (run_name, sku_count)
+    VALUES (%s, %s)
+    """
+
+    cursor.execute(sql, (
+        run_name,
+        sku_count
+    ))
+
+    connection.commit()
+
+    run_id = cursor.lastrowid
+
+    cursor.close()
+    connection.close()
+
+    return run_id
+
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
