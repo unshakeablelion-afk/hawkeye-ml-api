@@ -529,25 +529,81 @@ def build_horizon_rows(months, values):
 
     return rows
 
-def build_forecast_range_rows(months, values, wmape):
+def get_model_residuals(model_name, sku_df, actuals, test_periods=12):
+    actuals = list(actuals)
+    residuals = []
+
+    if len(actuals) < 12:
+        return []
+
+    start_index = max(6, len(actuals) - test_periods)
+
+    for i in range(start_index, len(actuals)):
+        train_actuals = actuals[:i]
+        train_sku_df = sku_df.iloc[:i].copy()
+        actual_value = float(actuals[i])
+
+        try:
+            forecast_values = generate_forecast_horizon(
+                model_name,
+                train_actuals,
+                train_sku_df,
+                horizon=1,
+                seasonal_periods=12
+            )
+
+            if len(forecast_values) == 0:
+                continue
+
+            forecast_value = float(forecast_values[0])
+            residual = actual_value - forecast_value
+            residuals.append(residual)
+
+        except Exception:
+            continue
+
+    return residuals
+
+def build_forecast_range_rows(months, values, wmape, residuals=None):
     rows = []
-    error_factor = get_error_factor(wmape)
 
-    for index, value in enumerate(values):
-        p50 = float(value)
-        p10 = max(0, p50 * (1 - error_factor))
-        p90 = p50 * (1 + error_factor)
+    if residuals and len(residuals) >= 3:
+        residual_series = pd.Series(residuals).astype(float)
 
-        rows.append({
-            "month": months[index],
-            "p10": round(p10, 2),
-            "p50": round(p50, 2),
-            "p90": round(p90, 2)
-        })
+        p10_residual = residual_series.quantile(0.10)
+        p90_residual = residual_series.quantile(0.90)
+
+        for index, value in enumerate(values):
+            p50 = float(value)
+            p10 = max(0, p50 + p10_residual)
+            p90 = max(0, p50 + p90_residual)
+
+            rows.append({
+                "month": months[index],
+                "p10": round(p10, 2),
+                "p50": round(p50, 2),
+                "p90": round(p90, 2),
+                "range_method": "Residual percentile"
+            })
+
+    else:
+        error_factor = get_error_factor(wmape)
+
+        for index, value in enumerate(values):
+            p50 = float(value)
+            p10 = max(0, p50 * (1 - error_factor))
+            p90 = p50 * (1 + error_factor)
+
+            rows.append({
+                "month": months[index],
+                "p10": round(p10, 2),
+                "p50": round(p50, 2),
+                "p90": round(p90, 2),
+                "range_method": "WMAPE fallback"
+            })
 
     return rows
-
-def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, test_periods=6):
+    def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, residuals=None, test_periods=6):
     actuals = list(actuals)
 
     if len(actuals) < 12:
@@ -559,8 +615,6 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, test
             "status": "Insufficient history",
             "details": []
         }
-
-    error_factor = get_error_factor(wmape)
 
     start_index = max(6, len(actuals) - test_periods)
 
@@ -587,8 +641,17 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, test
                 continue
 
             p50 = float(forecast_values[0])
-            p10 = max(0, p50 * (1 - error_factor))
-            p90 = p50 * (1 + error_factor)
+
+            if residuals and len(residuals) >= 3:
+                residual_series = pd.Series(residuals).astype(float)
+                p10 = max(0, p50 + residual_series.quantile(0.10))
+                p90 = max(0, p50 + residual_series.quantile(0.90))
+                range_method = "Residual percentile"
+            else:
+                error_factor = get_error_factor(wmape)
+                p10 = max(0, p50 * (1 - error_factor))
+                p90 = p50 * (1 + error_factor)
+                range_method = "WMAPE fallback"
 
             inside_range = p10 <= actual_value <= p90
 
@@ -603,7 +666,8 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, test
                 "p10": round(p10, 2),
                 "p50": round(p50, 2),
                 "p90": round(p90, 2),
-                "inside_range": inside_range
+                "inside_range": inside_range,
+                "range_method": range_method
             })
 
         except Exception:
@@ -1106,6 +1170,13 @@ def predict():
 
         best_model = ranked_results[0]
 
+        model_residuals = get_model_residuals(
+            best_model["model"],
+            sku_df,
+            actuals,
+            test_periods=12
+        )
+
         best_models.append({
             "sku": sku,
             "best_model": best_model["model"],
@@ -1113,7 +1184,8 @@ def predict():
             "wmape": best_model["wmape"],
             "bias": best_model["bias"],
             "rank": best_model["rank"],
-            "demand_pattern": demand_pattern
+            "demand_pattern": demand_pattern,
+            "residual_points_used": len(model_residuals)
         })
 
         forecast_explanations.append(
@@ -1130,6 +1202,7 @@ def predict():
             sku_df,
             actuals,
             best_model["wmape"],
+            residuals=model_residuals,
             test_periods=6
         )
 
@@ -1183,7 +1256,8 @@ def predict():
             "forecast_range": build_forecast_range_rows(
                 future_months,
                 horizon_values,
-                best_model["wmape"]
+                best_model["wmape"],
+                residuals=model_residuals
             ),
             "tasn_forecast": build_horizon_rows(future_months, tasn_values),
             "random_forest_forecast": build_horizon_rows(future_months, random_forest_values),
