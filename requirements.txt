@@ -6,3 +6,4 @@ statsmodels
 gunicorn
 xgboost
 mysql-connector-python
+flask-cors
