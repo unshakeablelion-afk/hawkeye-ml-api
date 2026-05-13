@@ -1379,6 +1379,17 @@ def predict():
 
         model_results.extend(ranked_results + unranked_results)
 
+        for result in ranked_results + unranked_results:
+            save_model_result(
+               run_id=run_id,
+               sku=result["sku"],
+               model_name=result["model"],
+               prediction=result["prediction"],
+               wmape=result["wmape"],
+               bias=result["bias"],
+               rank_value=result["rank"]
+            )
+        
         best_model = ranked_results[0]
 
         model_residuals = get_model_residuals(
