@@ -107,7 +107,43 @@ def test_db():
             "status": "error",
             "message": str(error)
         }), 500
+@app.route("/test-tables")
 
+def test_tables():
+
+    try:
+
+        connection = get_db_connection()
+
+        cursor = connection.cursor()
+
+        cursor.execute("SHOW TABLES")
+
+        tables = cursor.fetchall()
+
+        cursor.close()
+
+        connection.close()
+
+        table_names = [table[0] for table in tables]
+
+        return jsonify({
+
+            "status": "success",
+
+            "tables": table_names
+
+        })
+
+    except Exception as error:
+
+        return jsonify({
+
+            "status": "error",
+
+            "message": str(error)
+
+        }), 500
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
