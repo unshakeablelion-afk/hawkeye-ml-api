@@ -602,7 +602,7 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
                 "range_method": "WMAPE fallback"
             })
 
-        return rows
+    return rows
 
 def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, residuals=None, test_periods=6):
     actuals = list(actuals)
