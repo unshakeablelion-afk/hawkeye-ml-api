@@ -160,6 +160,33 @@ def save_forecast_run(run_name, sku_count):
     connection.close()
 
     return run_id
+def save_forecast_actuals(run_id, df):
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_actuals
+    (run_id, sku, month_label, month_number, actual_units)
+    VALUES (%s, %s, %s, %s, %s)
+    """
+
+    rows = []
+
+    for _, row in df.iterrows():
+        rows.append((
+            run_id,
+            str(row["sku"]),
+            str(row["month"]),
+            int(row["month_number"]),
+            float(row["actual_units"])
+        ))
+
+    cursor.executemany(sql, rows)
+    connection.commit()
+
+    cursor.close()
+    connection.close()
 
 def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_value):
 
@@ -1205,9 +1232,11 @@ def predict():
     run_name = f"Forecast Run - {pd.Timestamp.now()}"
 
     run_id = save_forecast_run(
-        run_name=run_name,
-        sku_count=len(skus)
-    )
+    run_name=run_name,
+    sku_count=len(skus)
+)
+
+save_forecast_actuals(run_id, df)
 
     for sku in skus:
         sku_df = df[df["sku"] == sku].copy()
