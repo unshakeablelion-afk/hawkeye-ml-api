@@ -1234,9 +1234,9 @@ def predict():
     run_id = save_forecast_run(
     run_name=run_name,
     sku_count=len(skus)
-)
+    )
 
-save_forecast_actuals(run_id, df)
+    save_forecast_actuals(run_id, df)
 
     for sku in skus:
         sku_df = df[df["sku"] == sku].copy()
