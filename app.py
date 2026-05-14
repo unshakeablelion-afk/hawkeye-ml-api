@@ -244,29 +244,43 @@ def save_model_results_bulk(run_id, results):
     cursor.close()
     connection.close()
 
-def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_rows):
+def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_range_rows):
 
     connection = get_db_connection()
     cursor = connection.cursor()
 
     sql = """
     INSERT INTO forecast_horizon_results
-    (run_id, sku, model, forecast_month, forecast_value)
-    VALUES (%s, %s, %s, %s, %s)
+    (
+        run_id,
+        sku,
+        selected_model,
+        forecast_month,
+        p10,
+        p50,
+        p90,
+        range_method
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     rows = []
 
-    for row in forecast_rows:
+    for row in forecast_range_rows:
+
         rows.append((
             run_id,
             sku,
             model_name,
             row["month"],
-            row["forecast"]
+            row["p10"],
+            row["p50"],
+            row["p90"],
+            row["range_method"]
         ))
 
     cursor.executemany(sql, rows)
+
     connection.commit()
 
     cursor.close()
@@ -1618,10 +1632,15 @@ def predict():
         })
 
         save_forecast_horizon_bulk(
-            run_id=run_id,
-            sku=str(sku),
-            model_name=best_model["model"],
-            forecast_rows=build_horizon_rows(future_months, horizon_values)
+           run_id=run_id,
+           sku=str(sku),
+           model_name=best_model["model"],
+           forecast_range_rows=build_forecast_range_rows(
+                future_months,
+                horizon_values,
+                best_model["wmape"],
+                residuals=model_residuals
+           )
         )
 
         narrative = generate_narrative(
