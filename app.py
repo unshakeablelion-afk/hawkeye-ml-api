@@ -244,7 +244,34 @@ def save_model_results_bulk(run_id, results):
     cursor.close()
     connection.close()
 
-@app.route("/compare-runs")
+def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_rows):
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_horizon_results
+    (run_id, sku, model, forecast_month, forecast_value)
+    VALUES (%s, %s, %s, %s, %s)
+    """
+
+    rows = []
+
+    for row in forecast_rows:
+        rows.append((
+            run_id,
+            sku,
+            model_name,
+            row["month"],
+            row["forecast"]
+        ))
+
+    cursor.executemany(sql, rows)
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+@app.route("/compare-runs")    
 def compare_runs():
 
     run_a = request.args.get("run_a")
@@ -1589,6 +1616,13 @@ def predict():
             "random_forest_forecast": build_horizon_rows(future_months, random_forest_values),
             "xgboost_forecast": build_horizon_rows(future_months, xgboost_values)
         })
+
+        save_forecast_horizon_bulk(
+            run_id=run_id,
+            sku=str(sku),
+            model_name=best_model["model"],
+            forecast_rows=build_horizon_rows(future_months, horizon_values)
+        )
 
         narrative = generate_narrative(
             str(sku),
