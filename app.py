@@ -188,6 +188,38 @@ def save_forecast_actuals(run_id, df):
     cursor.close()
     connection.close()
 
+def save_forecast_history(run_id, df):
+
+    if "forecast_units" not in df.columns:
+        return
+
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    sql = """
+    INSERT INTO forecast_history
+    (run_id, sku, month_label, month_number, historical_forecast, actual_units)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    """
+
+    rows = []
+
+    for _, row in df.iterrows():
+        rows.append((
+            run_id,
+            str(row["sku"]),
+            str(row["month"]),
+            int(row["month_number"]),
+            float(row["forecast_units"]),
+            float(row["actual_units"])
+        ))
+
+    cursor.executemany(sql, rows)
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+
 def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_value):
 
     connection = get_db_connection()
@@ -1278,6 +1310,7 @@ def predict():
     )
 
     save_forecast_actuals(run_id, df)
+    save_forecast_history(run_id, df)
 
     for sku in skus:
         sku_df = df[df["sku"] == sku].copy()
