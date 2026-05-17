@@ -775,7 +775,27 @@ def backtest_xgboost(actuals):
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
+def build_monthly_seasonal_profile(actuals):
+    actuals = list(actuals)
+    rows = []
 
+    for i, value in enumerate(actuals):
+        month_of_year = (i % 12) + 1
+        rows.append({
+            "month_of_year": month_of_year,
+            "actual_units": float(value)
+        })
+
+    df = pd.DataFrame(rows)
+
+    monthly_profile = (
+        df.groupby("month_of_year")["actual_units"]
+        .mean()
+        .to_dict()
+    )
+
+    return monthly_profile
+    
 def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_periods=12):
     actuals = list(actuals)
     forecasts = []
@@ -795,12 +815,27 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
                 forecasts = [actuals[-1]] * horizon
 
         elif model_name == "Trend-Adjusted Seasonal Naive":
-            if len(actuals) >= seasonal_periods * 2:
-                trend_factor = get_trend_factor(actuals, seasonal_periods)
-                seasonal_base = actuals[-seasonal_periods:]
-                forecasts = [seasonal_base[i % seasonal_periods] * trend_factor for i in range(horizon)]
-            else:
-                forecasts = [actuals[-1]] * horizon
+             if len(actuals) >= seasonal_periods * 2:
+             trend_factor = get_trend_factor(actuals, seasonal_periods)
+             monthly_profile = build_monthly_seasonal_profile(actuals)
+
+             next_month_number = len(actuals) + 1
+
+             forecasts = []
+
+             for i in range(horizon):
+                future_month_number = next_month_number + i
+                future_month_of_year = ((future_month_number - 1) % 12) + 1
+
+                seasonal_value = monthly_profile.get(
+                    future_month_of_year,
+                    actuals[-1]
+                )
+
+                forecasts.append(seasonal_value * trend_factor)
+
+        else:
+            forecasts = [actuals[-1]] * horizon
 
         elif model_name == "Random Forest Forecast":
             rolling_actuals = list(actuals)
