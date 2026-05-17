@@ -590,7 +590,7 @@ def get_random_forest_feature_importance(actuals):
     if len(feature_df) < 6:
         return []
 
-    RandomForestRegressor(
+    model = RandomForestRegressor(
         n_estimators=200,
         max_depth=4,
         min_samples_leaf=2,
@@ -753,7 +753,7 @@ def backtest_xgboost(actuals):
     if len(actuals) < 18:
         return None, None
 
-    start_index = max(15, len(actuals) - 4)
+    start_index = max(15, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
         train_actuals = actuals[:i]
