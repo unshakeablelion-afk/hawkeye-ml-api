@@ -1336,15 +1336,15 @@ def predict():
         ]
 
         if (
-           seasonality_detected
-           or "month_of_year" in top_rf_features
-           or "peak_month_flag" in top_rf_features
-           or "lag_12" in top_rf_features
-           or "year_over_year_growth" in top_rf_features
-       ):
-           demand_pattern = "Seasonal / event-driven"
-       else:
-           demand_pattern = "Non-seasonal / trend-stable"
+            seasonality_detected
+            or "month_of_year" in top_rf_features
+            or "peak_month_flag" in top_rf_features
+            or "lag_12" in top_rf_features
+            or "year_over_year_growth" in top_rf_features
+        ):
+            demand_pattern = "Seasonal / event-driven"
+        else:
+            demand_pattern = "Non-seasonal / trend-stable"
     
 
         demand_patterns.append({
@@ -1581,9 +1581,9 @@ def predict():
         ]
 
         if len(final_candidates) > 0:
-           best_model = final_candidates[0]
+            best_model = final_candidates[0]
         else:
-           best_model = ranked_results[0]
+            best_model = ranked_results[0]
 
         model_residuals = get_model_residuals(
             best_model["model"],
