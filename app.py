@@ -1335,10 +1335,16 @@ def predict():
             row["feature"] for row in rf_importance[:4]
         ]
 
-        if seasonality_detected or "month_of_year" in top_rf_features or "peak_month_flag" in top_rf_features:
-            demand_pattern = "Seasonal / event-driven"
-        else:
-            demand_pattern = "Non-seasonal / trend-stable"
+        if (
+           seasonality_detected
+           or "month_of_year" in top_rf_features
+           or "peak_month_flag" in top_rf_features
+           or "lag_12" in top_rf_features
+           or "year_over_year_growth" in top_rf_features
+       ):
+           demand_pattern = "Seasonal / event-driven"
+       else:
+           demand_pattern = "Non-seasonal / trend-stable"
     
 
         demand_patterns.append({
@@ -1568,20 +1574,16 @@ def predict():
             results=ranked_results + unranked_results
         )
         
-        best_model = ranked_results[0]
+        final_candidates = [
+            result for result in ranked_results
+            if result["model"] != "Naive Forecast"
+            and result["wmape"] is not None
+        ]
 
-        if (
-         best_model["model"] == "Naive Forecast"
-         and len(actuals) >= 24
-        ):
-         for candidate in ranked_results:
-             if candidate["model"] in [
-                 "Trend-Adjusted Seasonal Naive",
-                 "Holt-Winters Seasonal",
-                 "3-Month Moving Average"
-             ] and candidate["wmape"] is not None and candidate["wmape"] <= best_model["wmape"] * 1.35:
-                 best_model = candidate
-                 break
+        if len(final_candidates) > 0:
+           best_model = final_candidates[0]
+        else:
+           best_model = ranked_results[0]
 
         model_residuals = get_model_residuals(
             best_model["model"],
