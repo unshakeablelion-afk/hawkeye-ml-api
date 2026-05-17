@@ -411,7 +411,7 @@ def detect_seasonality(actuals, seasonal_periods=12):
 
     correlation_value = float(correlation)
 
-    if correlation_value >= 0.70:
+    if correlation_value >= 0.45:
         return True, f"Seasonality detected with year-over-year pattern correlation of {round(correlation_value, 2)}"
 
     return False, f"No strong seasonality detected; correlation was {round(correlation_value, 2)}"
@@ -539,7 +539,7 @@ def build_ml_features_from_actuals(actuals):
         })
 
     feature_df = pd.DataFrame(rows)
-    feature_df = feature_df.dropna()
+    feature_df = feature_df.fillna(0)
 
     return feature_df
 
@@ -590,10 +590,11 @@ def get_random_forest_feature_importance(actuals):
     if len(feature_df) < 6:
         return []
 
-    model = RandomForestRegressor(
-        n_estimators=50,
-        random_state=42,
-        min_samples_leaf=1
+    RandomForestRegressor(
+        n_estimators=200,
+        max_depth=4,
+        min_samples_leaf=2,
+        random_state=42
     )
 
     model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
@@ -721,7 +722,7 @@ def backtest_random_forest(actuals):
     if len(actuals) < 18:
         return None, None
 
-    start_index = max(15, len(actuals) - 4)
+    start_index = max(15, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
         train_actuals = actuals[:i]
@@ -1533,17 +1534,7 @@ def predict():
             }
         ]
 
-        if seasonality_detected:
-            ranked_candidates = sku_results
-        else:
-            ranked_candidates = [
-                result for result in sku_results
-                if result["model"] not in [
-                    "Seasonal Naive Forecast",
-                    "Trend-Adjusted Seasonal Naive",
-                    "Holt-Winters Seasonal"
-                ]
-            ]
+        ranked_candidates = sku_results
 
         ranked_results = sorted(
             ranked_candidates,
