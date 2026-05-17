@@ -15,25 +15,31 @@ warnings.filterwarnings("ignore")
 app = Flask(__name__)
 CORS(app)
 
+RF_FEATURES = [
+    "month_number", "month_of_year", "quarter", "lag_1", "lag_3_avg",
+    "lag_6", "lag_6_avg", "lag_12", "year_over_year_growth",
+    "recent_3_month_growth", "peak_month_flag", "post_peak_flag"
+]
+
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST"),
+    "user": os.environ.get("DB_USER"),
+    "password": os.environ.get("DB_PASSWORD"),
+    "database": os.environ.get("DB_NAME"),
+}
+
 
 def clean_for_json(value):
     if isinstance(value, dict):
         return {key: clean_for_json(val) for key, val in value.items()}
-
     if isinstance(value, list):
         return [clean_for_json(item) for item in value]
-
     if isinstance(value, tuple):
         return [clean_for_json(item) for item in value]
-
-    if pd.isna(value) if not isinstance(value, (list, dict, tuple)) else False:
+    if not isinstance(value, (list, dict, tuple)) and pd.isna(value):
         return None
-
-    if isinstance(value, float):
-        if math.isnan(value) or math.isinf(value):
-            return None
-        return value
-
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
     return value
 
 
@@ -42,30 +48,8 @@ def handle_exception(error):
     return jsonify(clean_for_json({
         "status": "error",
         "message": str(error),
-        "error_type": type(error).__name__
+        "error_type": type(error).__name__,
     })), 500
-
-
-RF_FEATURES = [
-    "month_number",
-    "month_of_year",
-    "quarter",
-    "lag_1",
-    "lag_3_avg",
-    "lag_6",
-    "lag_6_avg",
-    "lag_12",
-    "year_over_year_growth",
-    "recent_3_month_growth",
-    "peak_month_flag",
-    "post_peak_flag"
-]
-DB_CONFIG = {
-    "host": os.environ.get("DB_HOST"),
-    "user": os.environ.get("DB_USER"),
-    "password": os.environ.get("DB_PASSWORD"),
-    "database": os.environ.get("DB_NAME")
-}
 
 
 def get_db_connection():
@@ -73,234 +57,139 @@ def get_db_connection():
         host=DB_CONFIG["host"],
         user=DB_CONFIG["user"],
         password=DB_CONFIG["password"],
-        database=DB_CONFIG["database"]
+        database=DB_CONFIG["database"],
     )
-    
+
+
 @app.route("/")
 def home():
-    return jsonify({
-        "status": "success",
-        "message": "HawkEye ML API is running"
-    })
+    return jsonify({"status": "success", "message": "HawkEye ML API is running"})
+
 
 @app.route("/test-db")
 def test_db():
-
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-
         cursor.execute("SELECT 1")
         result = cursor.fetchone()
-
         cursor.close()
         connection.close()
-
-        return jsonify({
-            "status": "success",
-            "database_connected": True,
-            "result": result[0]
-        })
-
+        return jsonify({"status": "success", "database_connected": True, "result": result[0]})
     except Exception as error:
-        return jsonify({
-            "status": "error",
-            "message": str(error)
-        }), 500
+        return jsonify({"status": "error", "message": str(error)}), 500
 
 
 @app.route("/test-tables")
 def test_tables():
-
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-
         cursor.execute("SHOW TABLES")
         tables = cursor.fetchall()
-
         cursor.close()
         connection.close()
-
-        table_names = [table[0] for table in tables]
-
-        return jsonify({
-            "status": "success",
-            "tables": table_names
-        })
-
+        return jsonify({"status": "success", "tables": [table[0] for table in tables]})
     except Exception as error:
-        return jsonify({
-            "status": "error",
-            "message": str(error)
-        }), 500
+        return jsonify({"status": "error", "message": str(error)}), 500
 
 
 def save_forecast_run(run_name, sku_count):
-
     connection = get_db_connection()
     cursor = connection.cursor()
-
-    sql = """
-    INSERT INTO forecast_runs
-    (run_name, sku_count)
-    VALUES (%s, %s)
-    """
-
-    cursor.execute(sql, (
-        run_name,
-        sku_count
-    ))
-
+    cursor.execute(
+        "INSERT INTO forecast_runs (run_name, sku_count) VALUES (%s, %s)",
+        (run_name, sku_count),
+    )
     connection.commit()
-
     run_id = cursor.lastrowid
-
     cursor.close()
     connection.close()
-
     return run_id
-def save_forecast_actuals(run_id, df):
 
+
+def save_forecast_actuals(run_id, df):
     connection = get_db_connection()
     cursor = connection.cursor()
-
     sql = """
     INSERT INTO forecast_actuals
     (run_id, sku, month_label, month_number, actual_units)
     VALUES (%s, %s, %s, %s, %s)
     """
-
-    rows = []
-
-    for _, row in df.iterrows():
-        rows.append((
-            run_id,
-            str(row["sku"]),
-            str(row["month"]),
-            int(row["month_number"]),
-            float(row["actual_units"])
-        ))
-
+    rows = [
+        (run_id, str(row["sku"]), str(row["month"]), int(row["month_number"]), float(row["actual_units"]))
+        for _, row in df.iterrows()
+    ]
     cursor.executemany(sql, rows)
     connection.commit()
-
     cursor.close()
     connection.close()
 
-def save_forecast_history(run_id, df):
 
+def save_forecast_history(run_id, df):
     if "forecast_units" not in df.columns:
         return
 
     connection = get_db_connection()
     cursor = connection.cursor()
-
     sql = """
     INSERT INTO forecast_history
     (run_id, sku, month_label, month_number, historical_forecast, actual_units)
     VALUES (%s, %s, %s, %s, %s, %s)
     """
-
-    rows = []
-
-    for _, row in df.iterrows():
-        rows.append((
+    rows = [
+        (
             run_id,
             str(row["sku"]),
             str(row["month"]),
             int(row["month_number"]),
             float(row["forecast_units"]),
-            float(row["actual_units"])
-        ))
-
+            float(row["actual_units"]),
+        )
+        for _, row in df.iterrows()
+    ]
     cursor.executemany(sql, rows)
     connection.commit()
-
     cursor.close()
     connection.close()
 
-def save_model_result(run_id, sku, model_name, prediction, wmape, bias, rank_value):
-
-    connection = get_db_connection()
-    cursor = connection.cursor()
-
-    sql = """
-    INSERT INTO forecast_model_results
-    (run_id, sku, model, prediction, wmape, bias, rank_value)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """
-
-    cursor.execute(sql, (
-        run_id,
-        sku,
-        model_name,
-        prediction,
-        wmape,
-        bias,
-        str(rank_value)
-    ))
-
-    connection.commit()
-
-    cursor.close()
-    connection.close()
 
 def save_model_results_bulk(run_id, results):
-
     connection = get_db_connection()
     cursor = connection.cursor()
-
     sql = """
     INSERT INTO forecast_model_results
     (run_id, sku, model, prediction, wmape, bias, rank_value)
     VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
-
-    rows = []
-
-    for result in results:
-        rows.append((
+    rows = [
+        (
             run_id,
             result["sku"],
             result["model"],
             result["prediction"],
             result["wmape"],
             result["bias"],
-            str(result["rank"])
-        ))
-
+            str(result["rank"]),
+        )
+        for result in results
+    ]
     cursor.executemany(sql, rows)
     connection.commit()
-
     cursor.close()
     connection.close()
 
-def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_range_rows):
 
+def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_range_rows):
     connection = get_db_connection()
     cursor = connection.cursor()
-
     sql = """
     INSERT INTO forecast_horizon_results
-    (
-        run_id,
-        sku,
-        selected_model,
-        forecast_month,
-        p10,
-        p50,
-        p90,
-        range_method
-    )
+    (run_id, sku, selected_model, forecast_month, p10, p50, p90, range_method)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
-
-    rows = []
-
-    for row in forecast_range_rows:
-
-        rows.append((
+    rows = [
+        (
             run_id,
             sku,
             model_name,
@@ -308,102 +197,76 @@ def save_forecast_horizon_bulk(run_id, sku, model_name, forecast_range_rows):
             row["p10"],
             row["p50"],
             row["p90"],
-            row["range_method"]
-        ))
-
+            row["range_method"],
+        )
+        for row in forecast_range_rows
+    ]
     cursor.executemany(sql, rows)
-
     connection.commit()
-
     cursor.close()
     connection.close()
-@app.route("/compare-runs")    
-def compare_runs():
 
+
+@app.route("/compare-runs")
+def compare_runs():
     run_a = request.args.get("run_a")
     run_b = request.args.get("run_b")
 
     if not run_a or not run_b:
         return jsonify({
             "status": "error",
-            "message": "Please provide run_a and run_b. Example: /compare-runs?run_a=4&run_b=6"
+            "message": "Please provide run_a and run_b. Example: /compare-runs?run_a=4&run_b=6",
         }), 400
 
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
-
-        sql = """
-        SELECT
-            run_id,
-            sku,
-            model,
-            prediction,
-            wmape,
-            bias,
-            rank_value
-        FROM forecast_model_results
-        WHERE run_id IN (%s, %s)
-        ORDER BY sku, model, run_id
-        """
-
-        cursor.execute(sql, (run_a, run_b))
+        cursor.execute(
+            """
+            SELECT run_id, sku, model, prediction, wmape, bias, rank_value
+            FROM forecast_model_results
+            WHERE run_id IN (%s, %s)
+            ORDER BY sku, model, run_id
+            """,
+            (run_a, run_b),
+        )
         rows = cursor.fetchall()
-
         cursor.close()
         connection.close()
-
-        return jsonify(clean_for_json({
-            "status": "success",
-            "run_a": run_a,
-            "run_b": run_b,
-            "results": rows
-        }))
-
+        return jsonify(clean_for_json({"status": "success", "run_a": run_a, "run_b": run_b, "results": rows}))
     except Exception as error:
-        return jsonify({
-            "status": "error",
-            "message": str(error)
-        }), 500
+        return jsonify({"status": "error", "message": str(error)}), 500
+
 
 def calculate_wmape(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
-
     if actual.sum() == 0:
         return None
-
-    result = (abs(actual - forecast).sum() / actual.sum()) * 100
-    return round(float(result), 2)
+    return round(float((abs(actual - forecast).sum() / actual.sum()) * 100), 2)
 
 
 def calculate_bias(actual, forecast):
     actual = pd.Series(actual).astype(float)
     forecast = pd.Series(forecast).astype(float)
-
     if actual.sum() == 0:
         return None
-
-    bias = ((forecast - actual).sum() / actual.sum()) * 100
-    return round(float(bias), 2)
+    return round(float(((forecast - actual).sum() / actual.sum()) * 100), 2)
 
 
 def get_error_factor(wmape):
     if wmape is None:
         return 0.15
-
     return max(float(wmape) / 100, 0.08)
 
 
 def detect_seasonality(actuals, seasonal_periods=12):
     actuals = list(actuals)
-
     if len(actuals) < seasonal_periods * 2:
         return False, "Insufficient history"
 
     year_one = actuals[:seasonal_periods]
     year_two = actuals[seasonal_periods:seasonal_periods * 2]
-
     correlation = pd.Series(year_one).corr(pd.Series(year_two))
 
     if correlation is None or pd.isna(correlation):
@@ -419,7 +282,6 @@ def detect_seasonality(actuals, seasonal_periods=12):
 
 def get_trend_factor(actuals, seasonal_periods=12):
     actuals = list(actuals)
-
     if len(actuals) < seasonal_periods * 2:
         return 1.0
 
@@ -433,8 +295,7 @@ def get_trend_factor(actuals, seasonal_periods=12):
 
 
 def generate_future_months(last_month_label, horizon=12):
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
     try:
         month_text, year_text = str(last_month_label).split("-")
@@ -450,7 +311,6 @@ def generate_future_months(last_month_label, horizon=12):
         future_index = last_month_index + i
         month_index = future_index % 12
         future_year = year + (future_index // 12)
-
         future_months.append(f"{month_names[month_index]}-{future_year}")
 
     return future_months
@@ -458,36 +318,23 @@ def generate_future_months(last_month_label, horizon=12):
 
 def get_peak_months(actuals):
     actuals = list(actuals)
-
     if len(actuals) < 12:
         return []
 
     rows = []
-
     for i, value in enumerate(actuals):
         month_number = i + 1
         month_of_year = ((month_number - 1) % 12) + 1
-
-        rows.append({
-            "month_of_year": month_of_year,
-            "actual_units": float(value)
-        })
+        rows.append({"month_of_year": month_of_year, "actual_units": float(value)})
 
     df = pd.DataFrame(rows)
-
-    monthly_avg = (
-        df.groupby("month_of_year")["actual_units"]
-        .mean()
-        .sort_values(ascending=False)
-    )
-
+    monthly_avg = df.groupby("month_of_year")["actual_units"].mean().sort_values(ascending=False)
     return list(monthly_avg.head(2).index)
 
 
 def safe_growth(current_value, prior_value):
     if prior_value is None or prior_value == 0:
         return 0
-
     return float((current_value - prior_value) / prior_value)
 
 
@@ -500,7 +347,6 @@ def build_ml_features_from_actuals(actuals):
         month_number = i + 1
         month_of_year = ((month_number - 1) % 12) + 1
         quarter = ((month_of_year - 1) // 3) + 1
-
         previous_month_of_year = 12 if month_of_year == 1 else month_of_year - 1
 
         lag_1 = actuals[i - 1] if i >= 1 else None
@@ -519,9 +365,6 @@ def build_ml_features_from_actuals(actuals):
             prior_3_avg = sum(actuals[i - 6:i - 3]) / 3
             recent_3_month_growth = safe_growth(recent_3_avg, prior_3_avg)
 
-        peak_month_flag = 1 if month_of_year in peak_months else 0
-        post_peak_flag = 1 if previous_month_of_year in peak_months else 0
-
         rows.append({
             "month_number": month_number,
             "month_of_year": month_of_year,
@@ -533,15 +376,13 @@ def build_ml_features_from_actuals(actuals):
             "lag_12": lag_12,
             "year_over_year_growth": year_over_year_growth,
             "recent_3_month_growth": recent_3_month_growth,
-            "peak_month_flag": peak_month_flag,
-            "post_peak_flag": post_peak_flag,
-            "actual_units": actuals[i]
+            "peak_month_flag": 1 if month_of_year in peak_months else 0,
+            "post_peak_flag": 1 if previous_month_of_year in peak_months else 0,
+            "actual_units": actuals[i],
         })
 
     feature_df = pd.DataFrame(rows)
-    feature_df = feature_df.fillna(0)
-
-    return feature_df
+    return feature_df.fillna(0)
 
 
 def build_next_ml_features(actuals):
@@ -565,9 +406,6 @@ def build_next_ml_features(actuals):
     year_over_year_growth = safe_growth(lag_1, actuals[-13]) if len(actuals) >= 13 else 0
     recent_3_month_growth = safe_growth(recent_3_avg, prior_3_avg)
 
-    peak_month_flag = 1 if next_month_of_year in peak_months else 0
-    post_peak_flag = 1 if previous_month_of_year in peak_months else 0
-
     return pd.DataFrame([{
         "month_number": next_month_number,
         "month_of_year": next_month_of_year,
@@ -579,8 +417,8 @@ def build_next_ml_features(actuals):
         "lag_12": lag_12,
         "year_over_year_growth": year_over_year_growth,
         "recent_3_month_growth": recent_3_month_growth,
-        "peak_month_flag": peak_month_flag,
-        "post_peak_flag": post_peak_flag
+        "peak_month_flag": 1 if next_month_of_year in peak_months else 0,
+        "post_peak_flag": 1 if previous_month_of_year in peak_months else 0,
     }])
 
 
@@ -590,30 +428,18 @@ def get_random_forest_feature_importance(actuals):
     if len(feature_df) < 6:
         return []
 
-    model = RandomForestRegressor(
-        n_estimators=200,
-        max_depth=4,
-        min_samples_leaf=2,
-        random_state=42
-    )
-
+    model = RandomForestRegressor(n_estimators=200, max_depth=4, min_samples_leaf=2, random_state=42)
     model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
 
     importance_rows = []
-
     for feature, importance in zip(RF_FEATURES, model.feature_importances_):
-        importance_rows.append({
-            "feature": feature,
-            "importance": round(float(importance) * 100, 2)
-        })
+        importance_rows.append({"feature": feature, "importance": round(float(importance) * 100, 2)})
 
     return sorted(importance_rows, key=lambda x: x["importance"], reverse=True)
 
 
 def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows):
     top_features = feature_rows[:4] if feature_rows else []
-
-    driver_comments = []
 
     feature_comment_map = {
         "lag_12": "same month last year is strongly influencing the forecast, which points to seasonal repetition",
@@ -627,30 +453,23 @@ def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows)
         "recent_3_month_growth": "recent growth or slowdown is affecting the forecast",
         "peak_month_flag": "the model recognizes this SKU has recurring peak-month behavior",
         "post_peak_flag": "the model is accounting for demand behavior after a peak period",
-        "month_number": "the model is using the overall time trend"
+        "month_number": "the model is using the overall time trend",
     }
 
+    driver_comments = []
     for row in top_features:
         feature = row["feature"]
         importance = row["importance"]
-
         driver_comments.append({
             "feature": feature,
             "importance": importance,
-            "interpretation": feature_comment_map.get(
-                feature,
-                "this feature is influencing the forecast"
-            )
+            "interpretation": feature_comment_map.get(feature, "this feature is influencing the forecast"),
         })
 
     if len(top_features) == 0:
-        summary = (
-            f"{sku} does not have enough usable machine learning feature history "
-            f"to generate a strong driver explanation."
-        )
+        summary = f"{sku} does not have enough usable machine learning feature history to generate a strong driver explanation."
     else:
         main_driver = top_features[0]["feature"]
-
         summary = (
             f"{sku} is classified as {demand_pattern}. "
             f"The selected model is {best_model}. "
@@ -664,7 +483,7 @@ def generate_forecast_explanation(sku, best_model, demand_pattern, feature_rows)
         "model": best_model,
         "demand_pattern": demand_pattern,
         "summary": summary,
-        "drivers": driver_comments
+        "drivers": driver_comments,
     }
 
 
@@ -674,19 +493,10 @@ def predict_random_forest_next(actuals):
     if len(feature_df) < 6 or len(actuals) < 13:
         return None
 
-    model = RandomForestRegressor(
-        n_estimators=50,
-        random_state=42,
-        min_samples_leaf=1
-    )
-
+    model = RandomForestRegressor(n_estimators=50, random_state=42, min_samples_leaf=1)
     model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
-
     next_features = build_next_ml_features(actuals)
-
-    prediction = model.predict(next_features[RF_FEATURES])[0]
-
-    return float(prediction)
+    return float(model.predict(next_features[RF_FEATURES])[0])
 
 
 def predict_xgboost_next(actuals):
@@ -702,16 +512,12 @@ def predict_xgboost_next(actuals):
         subsample=0.8,
         colsample_bytree=0.8,
         objective="reg:squarederror",
-        random_state=42
+        random_state=42,
     )
 
     model.fit(feature_df[RF_FEATURES], feature_df["actual_units"])
-
     next_features = build_next_ml_features(actuals)
-
-    prediction = model.predict(next_features[RF_FEATURES])[0]
-
-    return float(prediction)
+    return float(model.predict(next_features[RF_FEATURES])[0])
 
 
 def backtest_random_forest(actuals):
@@ -725,17 +531,12 @@ def backtest_random_forest(actuals):
     start_index = max(15, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
-        train_actuals = actuals[:i]
-
         try:
-            prediction = predict_random_forest_next(train_actuals)
-
+            prediction = predict_random_forest_next(actuals[:i])
             if prediction is None:
                 continue
-
             forecasts.append(prediction)
             actual_test.append(actuals[i])
-
         except Exception:
             continue
 
@@ -756,17 +557,12 @@ def backtest_xgboost(actuals):
     start_index = max(15, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
-        train_actuals = actuals[:i]
-
         try:
-            prediction = predict_xgboost_next(train_actuals)
-
+            prediction = predict_xgboost_next(actuals[:i])
             if prediction is None:
                 continue
-
             forecasts.append(prediction)
             actual_test.append(actuals[i])
-
         except Exception:
             continue
 
@@ -775,27 +571,20 @@ def backtest_xgboost(actuals):
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
 
+
 def build_monthly_seasonal_profile(actuals):
     actuals = list(actuals)
     rows = []
 
     for i, value in enumerate(actuals):
         month_of_year = (i % 12) + 1
-        rows.append({
-            "month_of_year": month_of_year,
-            "actual_units": float(value)
-        })
+        rows.append({"month_of_year": month_of_year, "actual_units": float(value)})
 
     df = pd.DataFrame(rows)
 
-    monthly_profile = (
-        df.groupby("month_of_year")["actual_units"]
-        .mean()
-        .to_dict()
-    )
+    return df.groupby("month_of_year")["actual_units"].mean().to_dict()
 
-    return monthly_profile
-    
+
 def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_periods=12):
     actuals = list(actuals)
     forecasts = []
@@ -815,37 +604,28 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
                 forecasts = [actuals[-1]] * horizon
 
         elif model_name == "Trend-Adjusted Seasonal Naive":
-             if len(actuals) >= seasonal_periods * 2:
-             trend_factor = get_trend_factor(actuals, seasonal_periods)
-             monthly_profile = build_monthly_seasonal_profile(actuals)
+            if len(actuals) >= seasonal_periods * 2:
+                trend_factor = get_trend_factor(actuals, seasonal_periods)
+                monthly_profile = build_monthly_seasonal_profile(actuals)
 
-             next_month_number = len(actuals) + 1
+                next_month_number = len(actuals) + 1
+                forecasts = []
 
-             forecasts = []
-
-             for i in range(horizon):
-                future_month_number = next_month_number + i
-                future_month_of_year = ((future_month_number - 1) % 12) + 1
-
-                seasonal_value = monthly_profile.get(
-                    future_month_of_year,
-                    actuals[-1]
-                )
-
-                forecasts.append(seasonal_value * trend_factor)
-
-        else:
-            forecasts = [actuals[-1]] * horizon
+                for i in range(horizon):
+                    future_month_number = next_month_number + i
+                    future_month_of_year = ((future_month_number - 1) % 12) + 1
+                    seasonal_value = monthly_profile.get(future_month_of_year, actuals[-1])
+                    forecasts.append(seasonal_value * trend_factor)
+            else:
+                forecasts = [actuals[-1]] * horizon
 
         elif model_name == "Random Forest Forecast":
             rolling_actuals = list(actuals)
 
             for _ in range(horizon):
                 prediction = predict_random_forest_next(rolling_actuals)
-
                 if prediction is None:
                     prediction = rolling_actuals[-1]
-
                 forecasts.append(prediction)
                 rolling_actuals.append(prediction)
 
@@ -854,20 +634,16 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
 
             for _ in range(horizon):
                 prediction = predict_xgboost_next(rolling_actuals)
-
                 if prediction is None:
                     prediction = rolling_actuals[-1]
-
                 forecasts.append(prediction)
                 rolling_actuals.append(prediction)
 
         elif model_name == "Linear Regression":
             lr_model = LinearRegression()
             lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
-
             max_month = int(sku_df["month_number"].max())
             future_month_numbers = [[max_month + i] for i in range(1, horizon + 1)]
-
             forecasts = lr_model.predict(future_month_numbers).tolist()
 
         elif model_name == "3-Month Moving Average":
@@ -890,12 +666,7 @@ def generate_forecast_horizon(model_name, actuals, sku_df, horizon=12, seasonal_
 
         elif model_name == "Holt-Winters Seasonal":
             if len(actuals) >= 24:
-                model = ExponentialSmoothing(
-                    actuals,
-                    trend=None,
-                    seasonal="add",
-                    seasonal_periods=12
-                )
+                model = ExponentialSmoothing(actuals, trend=None, seasonal="add", seasonal_periods=12)
                 fitted = model.fit()
                 forecasts = fitted.forecast(horizon).tolist()
             else:
@@ -914,10 +685,7 @@ def build_horizon_rows(months, values):
     rows = []
 
     for index, value in enumerate(values):
-        rows.append({
-            "month": str(months[index]),
-            "forecast": round(float(value), 2)
-        })
+        rows.append({"month": str(months[index]), "forecast": round(float(value), 2)})
 
     return rows
 
@@ -937,21 +705,11 @@ def get_model_residuals(model_name, sku_df, actuals, test_periods=12):
         actual_value = float(actuals[i])
 
         try:
-            forecast_values = generate_forecast_horizon(
-                model_name,
-                train_actuals,
-                train_sku_df,
-                horizon=1,
-                seasonal_periods=12
-            )
-
+            forecast_values = generate_forecast_horizon(model_name, train_actuals, train_sku_df, horizon=1, seasonal_periods=12)
             if len(forecast_values) == 0:
                 continue
-
             forecast_value = float(forecast_values[0])
-            residual = actual_value - forecast_value
-            residuals.append(float(residual))
-
+            residuals.append(float(actual_value - forecast_value))
         except Exception:
             continue
 
@@ -963,7 +721,6 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
 
     if residuals and len(residuals) >= 3:
         residual_series = pd.Series(residuals).astype(float)
-
         p10_residual = float(residual_series.quantile(0.10))
         p90_residual = float(residual_series.quantile(0.90))
 
@@ -977,7 +734,7 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
                 "p10": round(float(p10), 2),
                 "p50": round(float(p50), 2),
                 "p90": round(float(p90), 2),
-                "range_method": "Residual percentile"
+                "range_method": "Residual percentile",
             })
 
     else:
@@ -993,7 +750,7 @@ def build_forecast_range_rows(months, values, wmape, residuals=None):
                 "p10": round(float(p10), 2),
                 "p50": round(float(p50), 2),
                 "p90": round(float(p90), 2),
-                "range_method": "WMAPE fallback"
+                "range_method": "WMAPE fallback",
             })
 
     return rows
@@ -1009,11 +766,10 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
             "inside_count": 0,
             "outside_count": 0,
             "status": "Insufficient history",
-            "details": []
+            "details": [],
         }
 
     start_index = max(6, len(actuals) - test_periods)
-
     details = []
     inside_count = 0
     outside_count = 0
@@ -1033,14 +789,7 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
         month_label = str(sku_df.iloc[i]["month"])
 
         try:
-            forecast_values = generate_forecast_horizon(
-                model_name,
-                train_actuals,
-                train_sku_df,
-                horizon=1,
-                seasonal_periods=12
-            )
-
+            forecast_values = generate_forecast_horizon(model_name, train_actuals, train_sku_df, horizon=1, seasonal_periods=12)
             if len(forecast_values) == 0:
                 continue
 
@@ -1070,7 +819,7 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
                 "p50": round(float(p50), 2),
                 "p90": round(float(p90), 2),
                 "inside_range": inside_range,
-                "range_method": range_method
+                "range_method": range_method,
             })
 
         except Exception:
@@ -1083,7 +832,6 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
         status = "No valid reliability test"
     else:
         coverage = round(float((inside_count / months_tested) * 100), 2)
-
         if coverage < 70:
             status = "Too narrow / high risk"
         elif coverage <= 90:
@@ -1097,7 +845,7 @@ def backtest_forecast_range_reliability(model_name, sku_df, actuals, wmape, resi
         "inside_count": int(inside_count),
         "outside_count": int(outside_count),
         "status": status,
-        "details": details
+        "details": details,
     }
 
 
@@ -1183,7 +931,6 @@ def backtest_trend_adjusted_seasonal_naive(actuals, seasonal_periods=12):
     for i in range(seasonal_periods, seasonal_periods * 2):
         historical_same_month = actuals[i - seasonal_periods]
         prediction = historical_same_month * trend_factor
-
         forecasts.append(prediction)
         actual_test.append(actuals[i])
 
@@ -1196,7 +943,7 @@ def backtest_moving_average(actuals, window=3):
     actual_test = []
 
     for i in range(window, len(actuals)):
-        forecasts.append(sum(actuals[i-window:i]) / window)
+        forecasts.append(sum(actuals[i - window:i]) / window)
         actual_test.append(actuals[i])
 
     return calculate_wmape(actual_test, forecasts), calculate_bias(actual_test, forecasts)
@@ -1206,20 +953,15 @@ def backtest_exponential_smoothing(actuals):
     actuals = list(actuals)
     forecasts = []
     actual_test = []
-
     start_index = max(2, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
-        train = actuals[:i]
-
         try:
-            model = ExponentialSmoothing(train, trend=None, seasonal=None)
+            model = ExponentialSmoothing(actuals[:i], trend=None, seasonal=None)
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
-
             forecasts.append(float(prediction))
             actual_test.append(actuals[i])
-
         except Exception:
             continue
 
@@ -1233,20 +975,15 @@ def backtest_holt_trend(actuals):
     actuals = list(actuals)
     forecasts = []
     actual_test = []
-
     start_index = max(3, len(actuals) - 6)
 
     for i in range(start_index, len(actuals)):
-        train = actuals[:i]
-
         try:
-            model = ExponentialSmoothing(train, trend="add", seasonal=None)
+            model = ExponentialSmoothing(actuals[:i], trend="add", seasonal=None)
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
-
             forecasts.append(float(prediction))
             actual_test.append(actuals[i])
-
         except Exception:
             continue
 
@@ -1260,25 +997,15 @@ def backtest_holt_winters(actuals):
     actuals = list(actuals)
     forecasts = []
     actual_test = []
-
     start_index = max(22, len(actuals) - 2)
 
     for i in range(start_index, len(actuals)):
-        train = actuals[:i]
-
         try:
-            model = ExponentialSmoothing(
-                train,
-                trend=None,
-                seasonal="add",
-                seasonal_periods=12
-            )
+            model = ExponentialSmoothing(actuals[:i], trend=None, seasonal="add", seasonal_periods=12)
             fitted = model.fit()
             prediction = fitted.forecast(1)[0]
-
             forecasts.append(float(prediction))
             actual_test.append(actuals[i])
-
         except Exception:
             continue
 
@@ -1295,12 +1022,9 @@ def backtest_linear_regression(sku_df):
     for i in range(2, len(sku_df)):
         train = sku_df.iloc[:i]
         test = sku_df.iloc[i]
-
         model = LinearRegression()
         model.fit(train[["month_number"]], train["actual_units"])
-
         prediction = model.predict([[test["month_number"]]])[0]
-
         forecasts.append(float(prediction))
         actual_test.append(float(test["actual_units"]))
 
@@ -1312,10 +1036,7 @@ def predict():
     data = request.get_json()
 
     if not data or "records" not in data:
-        return jsonify({
-            "status": "error",
-            "message": "No records provided"
-        }), 400
+        return jsonify({"status": "error", "message": "No records provided"}), 400
 
     df = pd.DataFrame(data["records"])
 
@@ -1323,10 +1044,7 @@ def predict():
 
     for column in required_columns:
         if column not in df.columns:
-            return jsonify({
-                "status": "error",
-                "message": f"Missing required column: {column}"
-            }), 400
+            return jsonify({"status": "error", "message": f"Missing required column: {column}"}), 400
 
     model_results = []
     best_models = []
@@ -1340,10 +1058,7 @@ def predict():
     skus = df["sku"].unique()
     run_name = f"Forecast Run - {pd.Timestamp.now()}"
 
-    run_id = save_forecast_run(
-    run_name=run_name,
-    sku_count=len(skus)
-    )
+    run_id = save_forecast_run(run_name=run_name, sku_count=len(skus))
 
     save_forecast_actuals(run_id, df)
     save_forecast_history(run_id, df)
@@ -1353,22 +1068,16 @@ def predict():
 
         sku_df["month_number"] = sku_df["month_number"].astype(float)
         sku_df["actual_units"] = sku_df["actual_units"].astype(float)
-
         sku_df = sku_df.sort_values("month_number").reset_index(drop=True)
 
         next_month = int(sku_df["month_number"].max()) + 1
         actuals = sku_df["actual_units"].tolist()
-
         last_month_label = sku_df.iloc[-1]["month"]
         future_months = generate_future_months(last_month_label, 12)
 
         seasonality_detected, seasonality_reason = detect_seasonality(actuals)
-
         rf_importance = get_random_forest_feature_importance(actuals)
-
-        top_rf_features = [
-            row["feature"] for row in rf_importance[:4]
-        ]
+        top_rf_features = [row["feature"] for row in rf_importance[:4]]
 
         if (
             seasonality_detected
@@ -1381,23 +1090,18 @@ def predict():
             demand_pattern = "Seasonal / event-driven"
         else:
             demand_pattern = "Non-seasonal / trend-stable"
-    
 
         demand_patterns.append({
             "sku": str(sku),
             "demand_pattern": demand_pattern,
             "seasonality_detected": bool(seasonality_detected),
-            "reason": str(seasonality_reason)
+            "reason": str(seasonality_reason),
         })
 
-        random_forest_feature_importance.append({
-            "sku": str(sku),
-            "features": rf_importance
-        })
+        random_forest_feature_importance.append({"sku": str(sku), "features": rf_importance})
 
         lr_model = LinearRegression()
         lr_model.fit(sku_df[["month_number"]], sku_df["actual_units"])
-
         lr_prediction = lr_model.predict([[next_month]])[0]
         lr_wmape, lr_bias = backtest_linear_regression(sku_df)
 
@@ -1463,12 +1167,7 @@ def predict():
 
         try:
             if len(actuals) >= 24:
-                hw_model = ExponentialSmoothing(
-                    actuals,
-                    trend=None,
-                    seasonal="add",
-                    seasonal_periods=12
-                )
+                hw_model = ExponentialSmoothing(actuals, trend=None, seasonal="add", seasonal_periods=12)
                 hw_fitted = hw_model.fit()
                 hw_prediction = hw_fitted.forecast(1)[0]
                 hw_wmape, hw_bias = backtest_holt_winters(actuals)
@@ -1490,7 +1189,7 @@ def predict():
                 "bias": lr_bias,
                 "records_used": int(len(sku_df)),
                 "slope": round(float(lr_model.coef_[0]), 2),
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1500,7 +1199,7 @@ def predict():
                 "bias": rf_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1510,7 +1209,7 @@ def predict():
                 "bias": xgb_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1520,7 +1219,7 @@ def predict():
                 "bias": naive_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1530,7 +1229,7 @@ def predict():
                 "bias": seasonal_naive_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1541,7 +1240,7 @@ def predict():
                 "records_used": int(len(sku_df)),
                 "slope": None,
                 "demand_pattern": demand_pattern,
-                "trend_factor": None if trend_factor is None else round(float(trend_factor), 3)
+                "trend_factor": None if trend_factor is None else round(float(trend_factor), 3),
             },
             {
                 "sku": str(sku),
@@ -1551,7 +1250,7 @@ def predict():
                 "bias": ma_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1561,7 +1260,7 @@ def predict():
                 "bias": es_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1571,7 +1270,7 @@ def predict():
                 "bias": holt_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
+                "demand_pattern": demand_pattern,
             },
             {
                 "sku": str(sku),
@@ -1581,50 +1280,31 @@ def predict():
                 "bias": hw_bias,
                 "records_used": int(len(sku_df)),
                 "slope": None,
-                "demand_pattern": demand_pattern
-            }
+                "demand_pattern": demand_pattern,
+            },
         ]
 
-        ranked_candidates = sku_results
-
-        ranked_results = sorted(
-            ranked_candidates,
-            key=lambda x: x["wmape"] if x["wmape"] is not None else 999999
-        )
-
-        unranked_results = [
-            result for result in sku_results
-            if result not in ranked_results
-        ]
+        ranked_results = sorted(sku_results, key=lambda x: x["wmape"] if x["wmape"] is not None else 999999)
 
         for index, result in enumerate(ranked_results, start=1):
             result["rank"] = int(index)
 
-        for result in unranked_results:
-            result["rank"] = "-"
+        model_results.extend(ranked_results)
 
-        model_results.extend(ranked_results + unranked_results)
+        save_model_results_bulk(run_id=run_id, results=ranked_results)
 
-        save_model_results_bulk(
-            run_id=run_id,
-            results=ranked_results + unranked_results
-        )
-        
         final_candidates = [
             result for result in ranked_results
-            if result["model"] != "Naive Forecast"
-            and result["wmape"] is not None
+            if result["model"] != "Naive Forecast" and result["wmape"] is not None
         ]
 
         best_model = final_candidates[0] if len(final_candidates) > 0 else ranked_results[0]
 
-        # Business rule: if SKU shows seasonal/event behavior, prefer a seasonal model
-        # when it is reasonably close to the mathematical winner.
         if demand_pattern == "Seasonal / event-driven":
             seasonal_priority_models = [
                 "Trend-Adjusted Seasonal Naive",
                 "Seasonal Naive Forecast",
-                "Holt-Winters Seasonal"
+                "Holt-Winters Seasonal",
             ]
 
             for candidate in ranked_results:
@@ -1636,12 +1316,7 @@ def predict():
                     best_model = candidate
                     break
 
-        model_residuals = get_model_residuals(
-            best_model["model"],
-            sku_df,
-            actuals,
-            test_periods=12
-        )
+        model_residuals = get_model_residuals(best_model["model"], sku_df, actuals, test_periods=12)
 
         best_models.append({
             "sku": str(sku),
@@ -1651,16 +1326,11 @@ def predict():
             "bias": best_model["bias"],
             "rank": best_model["rank"],
             "demand_pattern": demand_pattern,
-            "residual_points_used": int(len(model_residuals))
+            "residual_points_used": int(len(model_residuals)),
         })
 
         forecast_explanations.append(
-            generate_forecast_explanation(
-                str(sku),
-                best_model["model"],
-                demand_pattern,
-                rf_importance
-            )
+            generate_forecast_explanation(str(sku), best_model["model"], demand_pattern, rf_importance)
         )
 
         reliability_result = backtest_forecast_range_reliability(
@@ -1669,7 +1339,7 @@ def predict():
             actuals,
             best_model["wmape"],
             residuals=model_residuals,
-            test_periods=6
+            test_periods=6,
         )
 
         forecast_range_reliability.append({
@@ -1680,66 +1350,36 @@ def predict():
             "inside_count": reliability_result["inside_count"],
             "outside_count": reliability_result["outside_count"],
             "status": reliability_result["status"],
-            "details": reliability_result["details"]
+            "details": reliability_result["details"],
         })
 
-        horizon_values = generate_forecast_horizon(
-            best_model["model"],
-            actuals,
-            sku_df,
-            horizon=12,
-            seasonal_periods=12
-        )
+        horizon_values = generate_forecast_horizon(best_model["model"], actuals, sku_df, horizon=12, seasonal_periods=12)
+        tasn_values = generate_forecast_horizon("Trend-Adjusted Seasonal Naive", actuals, sku_df, horizon=12, seasonal_periods=12)
+        random_forest_values = generate_forecast_horizon("Random Forest Forecast", actuals, sku_df, horizon=12, seasonal_periods=12)
+        xgboost_values = generate_forecast_horizon("XGBoost Forecast", actuals, sku_df, horizon=12, seasonal_periods=12)
 
-        tasn_values = generate_forecast_horizon(
-            "Trend-Adjusted Seasonal Naive",
-            actuals,
-            sku_df,
-            horizon=12,
-            seasonal_periods=12
-        )
-
-        random_forest_values = generate_forecast_horizon(
-            "Random Forest Forecast",
-            actuals,
-            sku_df,
-            horizon=12,
-            seasonal_periods=12
-        )
-
-        xgboost_values = generate_forecast_horizon(
-            "XGBoost Forecast",
-            actuals,
-            sku_df,
-            horizon=12,
-            seasonal_periods=12
+        forecast_range_rows = build_forecast_range_rows(
+            future_months,
+            horizon_values,
+            best_model["wmape"],
+            residuals=model_residuals,
         )
 
         forecast_horizons.append({
             "sku": str(sku),
             "model": best_model["model"],
             "forecast": build_horizon_rows(future_months, horizon_values),
-            "forecast_range": build_forecast_range_rows(
-                future_months,
-                horizon_values,
-                best_model["wmape"],
-                residuals=model_residuals
-            ),
+            "forecast_range": forecast_range_rows,
             "tasn_forecast": build_horizon_rows(future_months, tasn_values),
             "random_forest_forecast": build_horizon_rows(future_months, random_forest_values),
-            "xgboost_forecast": build_horizon_rows(future_months, xgboost_values)
+            "xgboost_forecast": build_horizon_rows(future_months, xgboost_values),
         })
 
         save_forecast_horizon_bulk(
-           run_id=run_id,
-           sku=str(sku),
-           model_name=best_model["model"],
-           forecast_range_rows=build_forecast_range_rows(
-                future_months,
-                horizon_values,
-                best_model["wmape"],
-                residuals=model_residuals
-           )
+            run_id=run_id,
+            sku=str(sku),
+            model_name=best_model["model"],
+            forecast_range_rows=forecast_range_rows,
         )
 
         narrative = generate_narrative(
@@ -1748,15 +1388,12 @@ def predict():
             best_model["wmape"],
             best_model["bias"],
             best_model["prediction"],
-            demand_pattern
+            demand_pattern,
         )
 
-        narratives.append({
-            "sku": str(sku),
-            "narrative": narrative
-        })
+        narratives.append({"sku": str(sku), "narrative": narrative})
 
-    return jsonify({
+    return jsonify(clean_for_json({
         "status": "success",
         "message": "Forecast model comparison completed",
         "model_results": model_results,
@@ -1766,8 +1403,8 @@ def predict():
         "forecast_horizons": forecast_horizons,
         "random_forest_feature_importance": random_forest_feature_importance,
         "forecast_explanations": forecast_explanations,
-        "forecast_range_reliability": forecast_range_reliability
-    })
+        "forecast_range_reliability": forecast_range_reliability,
+    }))
 
 
 if __name__ == "__main__":
