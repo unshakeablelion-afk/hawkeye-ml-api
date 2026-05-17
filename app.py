@@ -1328,7 +1328,18 @@ def predict():
         future_months = generate_future_months(last_month_label, 12)
 
         seasonality_detected, seasonality_reason = detect_seasonality(actuals)
-        demand_pattern = "Seasonal" if seasonality_detected else "Non-seasonal / trend-stable"
+
+        rf_importance = get_random_forest_feature_importance(actuals)
+
+        top_rf_features = [
+            row["feature"] for row in rf_importance[:4]
+        ]
+
+        if seasonality_detected or "month_of_year" in top_rf_features or "peak_month_flag" in top_rf_features:
+            demand_pattern = "Seasonal / event-driven"
+        else:
+            demand_pattern = "Non-seasonal / trend-stable"
+    
 
         demand_patterns.append({
             "sku": str(sku),
@@ -1336,8 +1347,6 @@ def predict():
             "seasonality_detected": bool(seasonality_detected),
             "reason": str(seasonality_reason)
         })
-
-        rf_importance = get_random_forest_feature_importance(actuals)
 
         random_forest_feature_importance.append({
             "sku": str(sku),
@@ -1560,6 +1569,19 @@ def predict():
         )
         
         best_model = ranked_results[0]
+
+        if (
+         best_model["model"] == "Naive Forecast"
+         and len(actuals) >= 24
+        ):
+         for candidate in ranked_results:
+             if candidate["model"] in [
+                 "Trend-Adjusted Seasonal Naive",
+                 "Holt-Winters Seasonal",
+                 "3-Month Moving Average"
+             ] and candidate["wmape"] is not None and candidate["wmape"] <= best_model["wmape"] * 1.35:
+                 best_model = candidate
+                 break
 
         model_residuals = get_model_residuals(
             best_model["model"],
