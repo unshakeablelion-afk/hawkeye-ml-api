@@ -1341,6 +1341,7 @@ def predict():
             or "peak_month_flag" in top_rf_features
             or "lag_12" in top_rf_features
             or "year_over_year_growth" in top_rf_features
+            or "post_peak_flag" in top_rf_features
         ):
             demand_pattern = "Seasonal / event-driven"
         else:
@@ -1580,10 +1581,25 @@ def predict():
             and result["wmape"] is not None
         ]
 
-        if len(final_candidates) > 0:
-            best_model = final_candidates[0]
-        else:
-            best_model = ranked_results[0]
+        best_model = final_candidates[0] if len(final_candidates) > 0 else ranked_results[0]
+
+        # Business rule: if SKU shows seasonal/event behavior, prefer a seasonal model
+        # when it is reasonably close to the mathematical winner.
+        if demand_pattern == "Seasonal / event-driven":
+            seasonal_priority_models = [
+                "Trend-Adjusted Seasonal Naive",
+                "Seasonal Naive Forecast",
+                "Holt-Winters Seasonal"
+            ]
+
+            for candidate in ranked_results:
+                if (
+                    candidate["model"] in seasonal_priority_models
+                    and candidate["wmape"] is not None
+                    and candidate["wmape"] <= best_model["wmape"] * 1.45
+                ):
+                    best_model = candidate
+                    break
 
         model_residuals = get_model_residuals(
             best_model["model"],
